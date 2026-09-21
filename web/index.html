@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 工具额度看板</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<h1>AI 工具额度看板 <button id="settingsBtn" class="seg" style="margin-left:auto">⚙ 设置</button></h1>
+<div class="sub">数据源：本机 <code>~/.zcode</code> · <code>~/.cc-switch</code> · <code>~/.workbuddy-ai</code> · 只读 · 每 60s 刷新 · <span id="updatedAt"></span></div>
+
+<div id="goalBanner"></div>
+
+<div class="kpis" id="kpis"></div>
+<div class="cards" id="cards"></div>
+
+<section>
+  <h2>套餐实时额度（5 小时 / 周窗口）</h2>
+  <div class="cards" id="quotaCards"></div>
+</section>
+
+<section>
+  <h2>模型分类费用（按当前时间范围）</h2>
+  <div style="overflow-x:auto"><table id="modelTable"></table></div>
+</section>
+
+<section id="chart">
+  <h2>每日成本趋势（近 30 天）</h2>
+  <div id="chartBox"></div>
+</section>
+
+<section>
+  <h2>每日明细
+    <span class="seg" id="daySeg">
+      <button data-d="7">7 天</button>
+      <button data-d="30" class="on">30 天</button>
+      <button data-d="90">90 天</button>
+    </span>
+  </h2>
+  <div style="overflow-x:auto"><table id="detail"></table></div>
+</section>
+
+<dialog id="settingsDlg">
+  <h3>额度与计价设置</h3>
+  <div id="settingsBody"></div>
+  <div class="btns">
+    <button id="settingsCancel">取消</button>
+    <button id="settingsSave" class="primary">保存</button>
+  </div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "usdCnyRate": 7.2,
+  "plans": {
+    "codex":         { "label": "ChatGPT · Codex",   "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
+    "claudeDesktop": { "label": "Claude Desktop",    "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
+    "claudeCode":    { "label": "Claude Code",       "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
+    "zcode":         { "label": "ZCode",             "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
+    "workbuddy":     { "label": "WorkBuddy",         "plan": null, "cnyPerDay": null, "cnyPerMonth": null }
+  },
+  "priceOverrides": {},
+  "quotaKeys": {
+    "zhipu":   { "token": "", "organizationId": "", "projectId": "" },
+    "minimax": { "apiKey": "" },
+    "chatgpt": { "accessToken": "" }
+  },
+  "dailyGoal": { "cny": 200 }
+}
