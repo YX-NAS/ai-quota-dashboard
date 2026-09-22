@@ -5,7 +5,7 @@
 ![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 **每天用 AI 写代码，但你可能说不清：今天烧了多少钱？智谱的 5 小时窗口还剩多少？这个月照这么用下去得花多少？**
 
@@ -58,7 +58,15 @@ macOS 懒人一键全套（服务 + 菜单栏 ⚡︎ + 桌面卡片）：
 ./stop-all.sh      # 一键全停
 ```
 
-开机自启：系统设置 → 通用 → 登录项 → 添加 `start-all.sh`。
+Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `start-all.cmd` 或：
+
+```powershell
+.\start-all.cmd    # 可重复执行，已启动的跳过（无需编译，系统自带 PowerShell）
+.\stop-all.cmd     # 一键全停
+```
+
+开机自启（macOS）：系统设置 → 通用 → 登录项 → 添加 `start-all.sh`；
+开机自启（Windows）：`Win+R` 输入 `shell:startup`，把 `start-all.cmd` 的快捷方式放进去。
 
 ## 🧰 支持哪些工具
 
@@ -117,6 +125,18 @@ cd menubar && swiftc -O -o AIQuota.app/Contents/MacOS/AIQuota menubar.swift
 cd desktop && swiftc -O -o AIQuotaWidget.app/Contents/MacOS/AIQuotaWidget desktop-widget.swift
 ```
 
+## 🪟 Windows 托盘 + 桌面卡片（可选）
+
+`start-all.cmd` 会自动带起，无需编译（系统自带 PowerShell + WinForms），也可单独启动：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File menubar\tray.ps1     # 托盘
+powershell -NoProfile -ExecutionPolicy Bypass -File desktop\widget.ps1   # 桌面卡片
+```
+
+- **托盘 ⚡**：右下角常驻图标，圆盘颜色跟随当日目标进度（绿=健康 / 橙=接近 / 红=超出），悬停看今日费用，点开是全部明细、本周合计、昨日同期与套餐 5h/周额度，每 5 分钟自刷；目标过半 / 用完弹系统通知
+- **桌面卡片**：暗色霓虹小卡片贴在桌面（金额火焰渐变 + 发光进度条），可收起、可拖动、位置自动记住、右键切换置顶
+
 ## ⚙️ 配置
 
 全部配置存在 `config/plans.json`（首次运行自动生成，已被 gitignore，模板见 [config/plans.example.json](config/plans.example.json)）。推荐直接在网页设置里改，机密字段自动脱敏。
@@ -146,6 +166,9 @@ python3 test/verify-against-sources.py  # 独立复算今日数据，和页面�
 **macOS 上读文件失败 / 数据为空？**
 八成是 macOS 隐私保护拦了。去「系统设置 → 隐私与安全性 → 完全磁盘访问权限」，把你启动服务的终端 App（或 node）加进去，重启服务。
 
+**Windows 首次启动弹防火墙提示？**
+node 首次监听端口时 Windows 会问一次「允许访问」，点允许即可（服务只监听 127.0.0.1，勾不勾「专用网络」都不影响）。托盘 / 卡片里的中文日期按北京时间切分，与网页一致。
+
 **实时额度显示「不可用」？**
 手动填的 token 过期了。去设置里清空对应 Key（回退自动发现），ChatGPT 也可以重跑 `python3 scripts/sync-chatgpt-token.py`。这些额度接口是厂商非公开端点，接口变了看板会自动降级为仅本地统计，用量和成本不受影响。
 
@@ -173,7 +196,10 @@ server/collectors/      4 个用量采集器 + 3 个实时额度采集器
 server/lib/             计价 / 聚合 / 配置
 web/                    前端单页（零依赖）
 mcp/mcp.js              MCP Server（兼 CLI）
-menubar/ desktop/       macOS 菜单栏与桌面组件（Swift，可选）
+menubar/                macOS 菜单栏（Swift）+ Windows 托盘（PowerShell，可选）
+desktop/                macOS 桌面组件（Swift）+ Windows 桌面卡片（PowerShell，可选）
+start-all / stop-all    一键启动/停止（.sh = macOS/Linux，.cmd = Windows）
+scripts/                辅助脚本（token 同步、演示数据、Windows 启停逻辑）
 config/plans.json       用户配置（自动生成，不进版本库）
 test/                   单元测试 + 数据核验
 docs/                   设计文档 + 截图

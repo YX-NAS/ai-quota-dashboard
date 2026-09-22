@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0（2026-09-22）
+
+- 新增：**Windows 支持**——服务端与全部采集器本就跨平台（`os.homedir()` 数据源、动态 `os.platform()` 凭证解密），本版补齐 Windows 形态：`start-all.cmd` / `stop-all.cmd` 一键启停（薄包装，逻辑在 `scripts/start-all.ps1`，含 node 版本检测、token 同步、端口探测与服务就绪等待）
+- 新增：`menubar/tray.ps1` Windows 托盘插件（零依赖 PowerShell + WinForms，对齐 macOS 菜单栏）——圆盘图标按当日目标进度换色（绿/橙/红），左键弹全部明细（工具行多巴胺配色、本周合计、昨日同期、真实扣费、目标方块进度条、套餐 5h/周额度），目标 50% / 100% 里程碑系统通知（Toast），服务未就绪 15s 快速重试
+- 新增：`desktop/widget.ps1` Windows 桌面卡片（零依赖 PowerShell + GDI+ 自绘，对齐 macOS 桌面组件）——暗色霓虹卡片（金额火焰渐变、发光进度条、渐变描边），可收起、可拖动（位置记在 `%LOCALAPPDATA%`）、右键切换置顶，高 DPI 适配
+- 文档：README 中英文新增 Windows 章节（含开机自启 `shell:startup`、防火墙首次授权 FAQ），平台徽章加 Windows；package.json `os` 加 `win32`，版本 1.2.0
+
 ## 1.1.0（2026-09-22）
 
 - 改版：「今日产出目标」改为「当日目标成本」——从产出冲刺（花得越多越燃）改为预算口径：剩余预算、按当前节奏预计用完时间、用完/超支预警；网页横幅、设置面板、菜单栏（含系统通知）、MCP 输出文案同步更新

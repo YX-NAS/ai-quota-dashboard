@@ -31,23 +31,33 @@
 ```
 ai-quota-dashboard/
 ├── server/
-│   ├── index.js            # HTTP 服务 + 路由 + 定时刷新
+│   ├── index.js            # HTTP 服务 + 路由 + 定时刷新（跨平台）
 │   ├── lib/
 │   │   ├── store.js        # 聚合存储：requests[]、日/月汇总、缓存
 │   │   ├── pricing.js      # 单价表 + 成本计算
 │   │   └── plans.js        # 用户额度配置读写 (config/plans.json)
 │   └── collectors/
-│       ├── zcode.js        # SQLite 只读副本采集
-│       ├── ccswitch.js     # cc-switch.db 采集
-│       ├── workbuddy.js    # workbuddy jsonl 采集
-│       └── chatgpt-quota.js# ChatGPT 实时额度（尽力而为）
+│       ├── zcode.js        # ~/.zcode SQLite 只读采集
+│       ├── ccswitch.js     # ~/.cc-switch/cc-switch.db 采集
+│       ├── claudecode.js   # ~/.claude jsonl 采集
+│       ├── workbuddy.js    # ~/.workbuddy-ai jsonl 采集
+│       ├── chatgpt-quota.js# ChatGPT 实时额度（尽力而为）
+│       ├── minimax-quota.js# MiniMax 实时额度
+│       └── zhipu-quota.js  # 智谱 Coding Plan 实时额度（团队版）
 ├── web/
 │   ├── index.html          # 单页看板
 │   └── app.js + style.css
+├── mcp/mcp.js              # MCP Server（兼 CLI）
+├── menubar/                # macOS 菜单栏 menubar.swift + Windows 托盘 tray.ps1
+├── desktop/                # macOS 桌面组件 desktop-widget.swift + Windows 卡片 widget.ps1
+├── scripts/                # token 同步、演示数据生成、Windows 启停逻辑
+├── start-all / stop-all    # 一键启停（.sh = macOS/Linux，.cmd+.ps1 = Windows）
 ├── config/plans.json       # 用户配置的套餐额度（首次运行生成模板）
 ├── docs/DESIGN.md
 └── test/                   # 测试脚本 + fixtures
 ```
+
+> 平台说明：数据源路径全部经 `os.homedir()` 解析（Windows 上即 `%USERPROFILE%\.zcode` 等，各家 CLI 跨平台行为一致），ZCode 凭证解密密钥按 `os.platform()` 动态派生，服务端无平台分支。平台差异只在外壳：macOS 用 Swift（菜单栏/桌面卡片），Windows 用系统自带 PowerShell + WinForms（托盘/卡片），均为零依赖单文件。
 
 ## 4. 数据模型（内部统一格式）
 

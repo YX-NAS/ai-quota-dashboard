@@ -5,7 +5,7 @@
 ![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 **You use AI coding tools every day — but can you answer: how much did today cost? How much of your Zhipu 5-hour window is left? What will this month cost at the current pace?**
 
@@ -54,7 +54,15 @@ macOS one-click full setup (server + menu bar ⚡︎ + desktop widget):
 ./stop-all.sh      # stop everything
 ```
 
-Launch at login: System Settings → General → Login Items → add `start-all.sh`.
+Windows one-click full setup (server + tray ⚡ + desktop widget) — double-click `start-all.cmd` or:
+
+```powershell
+.\start-all.cmd    # idempotent; no build step — ships with stock PowerShell + WinForms
+.\stop-all.cmd     # stop everything
+```
+
+Launch at login (macOS): System Settings → General → Login Items → add `start-all.sh`.
+Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `start-all.cmd` there.
 
 ## 🧰 What it supports
 
@@ -113,6 +121,18 @@ cd menubar && swiftc -O -o AIQuota.app/Contents/MacOS/AIQuota menubar.swift
 cd desktop && swiftc -O -o AIQuotaWidget.app/Contents/MacOS/AIQuotaWidget desktop-widget.swift
 ```
 
+## 🪟 Windows tray + desktop widget (optional)
+
+`start-all.cmd` brings both up automatically — no build step (stock PowerShell + WinForms). To start them individually:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File menubar\tray.ps1     # tray
+powershell -NoProfile -ExecutionPolicy Bypass -File desktop\widget.ps1   # desktop widget
+```
+
+- **Tray ⚡**: a resident notification-area icon whose disc color tracks the daily cost target (green / orange / red); hover for today's cost, click for the full breakdown — per-tool rows, week total, vs-yesterday and per-plan 5h/weekly quotas; refreshes every 5 minutes and fires system notifications at 50% / 100% of the daily target
+- **Desktop widget**: a dark neon card pinned to the desktop (flame-gradient amount + glowing bars), collapsible, draggable with its position remembered, right-click to toggle always-on-top
+
 ## ⚙️ Configuration
 
 Everything lives in `config/plans.json` (auto-generated; excluded by gitignore; see [config/plans.example.json](config/plans.example.json)). In-app Settings is recommended; secret fields are masked.
@@ -142,6 +162,9 @@ That tool isn't installed or has no records yet; its collector is skipped. Check
 **Read failures / empty data on macOS?**
 Almost certainly macOS TCC. Grant Full Disk Access to your terminal app (or node) under System Settings → Privacy & Security, then restart.
 
+**Windows firewall prompt on first launch?**
+Windows asks once when node starts listening. Allow it — the server binds to `127.0.0.1` only, so the network-profile checkboxes don't matter. Dates in the tray / widget split by Beijing time, same as the web UI.
+
 **Real-time quota shows "unavailable"?**
 An expired manually-set token, most likely. Clear the key in Settings (falls back to auto-discovery), or re-run `python3 scripts/sync-chatgpt-token.py` for ChatGPT. These endpoints are undocumented vendor APIs; when they change, the dashboard degrades to local stats only.
 
@@ -169,7 +192,10 @@ server/collectors/      4 usage collectors + 3 real-time quota collectors
 server/lib/             pricing / aggregation / config
 web/                    zero-dependency frontend
 mcp/mcp.js              MCP server (doubles as CLI)
-menubar/ desktop/       optional macOS menu bar & desktop widget (Swift)
+menubar/                macOS menu bar (Swift) + Windows tray (PowerShell), optional
+desktop/                macOS desktop widget (Swift) + Windows widget (PowerShell), optional
+start-all / stop-all    one-click start/stop (.sh = macOS/Linux, .cmd = Windows)
+scripts/                helpers (token sync, demo data, Windows start/stop logic)
 config/plans.json       user config (auto-generated, not committed)
 test/                   unit tests + data cross-check
 docs/                   design doc + screenshots

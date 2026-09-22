@@ -1,7 +1,7 @@
 {
   "name": "ai-quota-dashboard",
-  "version": "1.1.0",
-  "description": "本地优先的 AI 工具额度看板：ChatGPT·Codex / Claude / ZCode / WorkBuddy 用量、成本、套餐实时额度（智谱 / MiniMax / ChatGPT 5h+周窗口），Web + macOS 菜单栏/桌面组件 + MCP Server，零 npm 依赖",
+  "version": "1.2.0",
+  "description": "本地优先的 AI 工具额度看板：ChatGPT·Codex / Claude / ZCode / WorkBuddy 用量、成本、套餐实时额度（智谱 / MiniMax / ChatGPT 5h+周窗口），Web + macOS 菜单栏/桌面组件 + Windows 托盘/桌面卡片 + MCP Server，零 npm 依赖",
   "type": "commonjs",
   "main": "server/index.js",
   "bin": {
@@ -18,7 +18,8 @@
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "keywords": [
     "ai",
