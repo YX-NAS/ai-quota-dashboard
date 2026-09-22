@@ -43,10 +43,11 @@ function render() {
 // 套餐实时额度卡（5h / 周窗口）
 function quotaBar(label, used, resetMs) {
   if (used == null) return `<div class="quota-line"><span>${label}</span><span class="mut">不可用</span></div>`;
+  used = Math.round(used * 10) / 10; // 浮点取整，避免「剩 12.700000000000003%」
   const cls = used > 85 ? 'over' : used > 60 ? 'warn' : '';
   const reset = resetMs ? ` · 剩 ${Math.floor(resetMs / 3600e3)}h${Math.floor(resetMs % 3600e3 / 60e3)}m` : '';
   return `<div class="bar"><i class="${cls}" style="width:${Math.min(used, 100)}%"></i></div>
-    <div class="quota-line"><span>${label} 已用 ${used}%</span><span class="mut">${used > 85 ? '⚠️ ' : ''}剩 ${100 - used}%${reset}</span></div>`;
+    <div class="quota-line"><span>${label} 已用 ${used}%</span><span class="mut">${used > 85 ? '⚠️ ' : ''}剩 ${Math.round((100 - used) * 10) / 10}%${reset}</span></div>`;
 }
 function renderQuotaCards() {
   const items = [];
