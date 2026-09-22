@@ -11,7 +11,7 @@
 
 这个看板把这些问题变成一屏数字。它蹲在你的电脑里，默默读着 ZCode、Claude Code、Codex、WorkBuddy 的本地记录，算好每一分钱（等价成本）、盯紧每一个额度窗口——**不联网上传任何东西**。
 
-![看板总览：今日产出目标 + KPI + 各工具卡片](docs/screenshots/dashboard.png)
+![看板总览：当日目标成本 + KPI + 各工具卡片](docs/screenshots/dashboard.png)
 
 ## 它长这样
 
@@ -34,7 +34,7 @@
 - 💸 **今天花了多少**：五张工具卡片，今日 / 本月 / 本周费用一目了然；订阅制工具自动折算「等价成本」，和真扣费的工具放在一起比
 - ⏳ **额度还剩多少**：ChatGPT、智谱 Coding Plan、MiniMax 的 5 小时窗口和周额度实时进度条，>60% 变黄、>85% 变红，带重置倒计时
 - 📈 **照这么用下去要花多少**：月底线性预估；30 天堆叠趋势图 + 每日明细（7/30/90 天切换）
-- 🎯 **每日产出目标**：定个 ¥200/天的小目标，横幅里看进度、菜单栏看百分比、达标放烟花（真的会弹系统通知 🎆）
+- 🎯 **当日目标成本**：给每天定个 ¥200 的成本目标，横幅里看剩余预算、预计用完时间，菜单栏看百分比，用完/超支弹系统通知提醒（💸）
 - 🆚 **和昨天比**：今日同期 vs 昨日同期，涨绿跌红，干劲拉满
 - 🔌 **MCP Server**：让 ZCode / Claude Code / Codex 直接问你「这周用了多少额度」
 
@@ -127,7 +127,7 @@ cd desktop && swiftc -O -o AIQuotaWidget.app/Contents/MacOS/AIQuotaWidget deskto
   "plans": { "zcode": { "cnyPerMonth": 598 } },  // 各工具月额度（等价 ¥）
   "priceOverrides": { "glm-5.3": { "in": 8, "out": 28, "cacheRead": 2 } },
   "quotaKeys": { "zhipu": { "token": "" } },      // 实时额度凭证，留空 = 自动发现
-  "dailyGoal": { "cny": 200 }           // 每日产出目标
+  "dailyGoal": { "cny": 200 }           // 当日目标成本
 }
 ```
 

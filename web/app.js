@@ -9,7 +9,7 @@ const TOOLS = [
 ];
 const fmt = n => n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
 const fmtCny = n => n == null ? '—' : '¥' + n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-// 昨日同期对比：产出导向，涨=绿（越多越燃）
+// 昨日同期对比：涨=绿（投入更多视为正向，与目标成本的预警只在横幅/菜单栏体现）
 function cmpDelta(today, yesterday) {
   if (!yesterday || yesterday <= 0.005) return '';
   const d = (today - yesterday) / yesterday * 100;
@@ -107,28 +107,29 @@ function renderQuotaCards() {
   items.push({ name: zhipuName, note: zhipuNote, body: zhipuBody, fresh: zhipuFresh });
 
   document.getElementById('quotaCards').innerHTML = items.map(it => `
-    <div class="card">
+    <div class="card" data-key="${it.name}">
       <h3>${it.name} <span class="tag">实时</span></h3>
       <div class="rows"><div><span class="k">适用</span><span class="mut" style="font-size:12px">${it.note}</span></div></div>
       ${it.body}
       <div class="fresh">${it.fresh}</div>
     </div>`).join('');
+  applyCardOrder('quotaCards');
 }
 
 function toolDay(day, key) { return (snap.agg.daily[day] || {})[key] || null; }
 
-// ---------- 今日产出目标（鼓励横幅） ----------
-// 进度分档鼓励语：越多越燃
+// ---------- 当日目标成本（预算横幅） ----------
+// 进度分档提示语：随预算消耗升温，用完转超支预警
 function goalTier(pct) {
-  if (pct <= 0) return { msg: '新的一天，AI 引擎已就位，等你点火 🚀', cls: 'g0' };
-  if (pct < 25) return { msg: '热身中，思路开始冒泡 💭', cls: 'g25' };
-  if (pct < 50) return { msg: '渐入佳境，火花正在积聚 ✨', cls: 'g25' };
-  if (pct < 75) return { msg: '火力全开，脑洞越开越大 🌀', cls: 'g50' };
-  if (pct < 100) return { msg: '冲刺！距离火花四射只差一点点 🔥', cls: 'g75' };
-  if (pct < 150) return { msg: '目标达成，今日火花四射 🎆 继续狂飙！', cls: 'g100' };
-  return { msg: '超神发挥！这生产力已经刹不住车了 🏆', cls: 'g100' };
+  if (pct <= 0) return { msg: '新的一天，预算已就位，按需使用 🚀', cls: 'g0' };
+  if (pct < 25) return { msg: '预算充裕，安心干活 💭', cls: 'g25' };
+  if (pct < 50) return { msg: '消耗平稳，余量尚多 ✨', cls: 'g25' };
+  if (pct < 75) return { msg: '已用过半，留意消耗节奏 🌀', cls: 'g50' };
+  if (pct < 100) return { msg: '预算将尽，要紧的任务优先安排 ⚠️', cls: 'g75' };
+  if (pct < 150) return { msg: '当日目标成本已用完 💸 再跑就要超支了', cls: 'g100' };
+  return { msg: '已大幅超出当日目标成本 🚨 记得收敛或上调目标', cls: 'g100' };
 }
-// 按北京时间今日已过时长外推的达标预测
+// 按北京时间今日已过时长外推的预算耗尽预测
 function goalEta(spent, target) {
   if (spent <= 0 || spent >= target) return '';
   const bjNow = Date.now() + 8 * 3600e3;
@@ -136,9 +137,9 @@ function goalEta(spent, target) {
   if (bjMsToday < 20 * 60e3) return '';           // 刚过零点速率无意义
   const rate = spent / bjMsToday;                 // ¥/ms
   const etaMs = (target - spent) / rate;
-  if (etaMs + bjMsToday > 86400e3) return '按当前节奏今天恐难达标，加把劲 🔥';
+  if (etaMs + bjMsToday > 86400e3) return '按当前节奏今天用不完预算 👍';
   const eta = new Date(Date.now() + etaMs + 8 * 3600e3).toISOString().slice(11, 16);
-  return `按当前节奏预计 ${eta} 达标`;
+  return `按当前节奏预计 ${eta} 用完预算`;
 }
 function renderGoalBanner() {
   const goal = (snap.plans.dailyGoal || {}).cny || 0;
@@ -150,7 +151,7 @@ function renderGoalBanner() {
   const pct = Math.min(spent / goal * 100, 999);
   const tier = goalTier(pct);
   const eta = goalEta(spent, goal);
-  const left = spent >= goal ? `超出 ¥${(spent - goal).toFixed(0)}` : `还差 ¥${(goal - spent).toFixed(0)}`;
+  const left = spent >= goal ? `超出目标 ¥${(spent - goal).toFixed(0)}` : `剩余预算 ¥${(goal - spent).toFixed(0)}`;
   const ySame = snap.cmp && snap.cmp.yesterdaySameTime.total;
   const yFull = snap.cmp && snap.cmp.yesterdayFull.total;
   let cmpPart = '';
@@ -162,11 +163,11 @@ function renderGoalBanner() {
   box.innerHTML = `
     <div class="goal ${tier.cls}">
       <div class="goal-head">
-        <span class="goal-title">🎯 今日产出目标</span>
+        <span class="goal-title">🎯 当日目标成本</span>
         <span class="goal-msg">${tier.msg}</span>
-        <span class="goal-num">${fmtCny(spent)} / ¥${goal}<span class="goal-pct">${pct >= 100 ? '💯' : pct.toFixed(0) + '%'}</span></span>
+        <span class="goal-num">${fmtCny(spent)} / ¥${goal}<span class="goal-pct">${pct >= 100 ? '💸' : pct.toFixed(0) + '%'}</span></span>
       </div>
-      <div class="bar goalbar"><i style="width:${Math.min(pct, 100)}%"></i><em style="left:${Math.min(pct, 100)}%">${spent >= goal ? '🎆' : pct >= 50 ? '✨' : ''}</em></div>
+      <div class="bar goalbar"><i style="width:${Math.min(pct, 100)}%"></i><em style="left:${Math.min(pct, 100)}%">${spent >= goal ? '🚨' : pct >= 75 ? '⚠️' : ''}</em></div>
       <div class="goal-foot"><span>${left}${cmpPart}${yFullPart}（等价成本口径 · 北京时间）</span><span>${eta}</span></div>
     </div>`;
 }
@@ -294,12 +295,12 @@ function renderCards() {
       const subUsd = month.subUsd || 0, payUsd = month.payUsd || 0;
       const subReq = month.subRequests || 0, payReq = month.payRequests || 0;
       costLine = `${fmtCny(month.costCny)}<br>
-        <span style="font-size:12px"><span class="tag sub-pay">Plus 套餐</span> ${subReq} 次 · $${subUsd.toFixed(2)}（等价，不扣费）</span><br>
+        <span style="font-size:12px"><span class="tag sub-pay" title="Plus 套餐内等价折算，不额外扣费">Plus 套餐</span> ${subReq} 次 · $${subUsd.toFixed(2)}</span><br>
         <span style="font-size:12px"><span class="tag">第三方实扣</span> ${payReq} 次 · <b>$${payUsd.toFixed(2)}</b> ≈ ${fmtCny(payUsd * fx)}</span>`;
     } else if (t.key === 'claudeDesktop') {
       costLine = `${fmtCny(month.costCny)} <span class="mut">($${month.costUsd.toFixed(2)} × ${fx})</span>`;
     } else {
-      costLine = `${fmtCny(month.equivalentCny)} <span class="tag sub-pay">订阅制 · 等价成本，非扣费</span>`;
+      costLine = `${fmtCny(month.equivalentCny)} <span class="tag sub-pay" title="订阅制 · 等价按量成本，非实际扣费">订阅制 · 非扣费</span>`;
     }
 
     const planLine = (p.plan || t.planName)
@@ -310,7 +311,7 @@ function renderCards() {
     const yToolPart = yTool && yTool.requests
       ? ` <span class="mut" style="font-size:11px">· 昨同 ${fmt(yTool.requests)} 次 / ${fmtCny(yTool.cny)}</span>` : '';
 
-    return `<div class="card">
+    return `<div class="card" data-key="${t.key}">
       <h3>${t.name} ${t.sub ? '<span class="tag sub-pay">套餐</span>' : '<span class="tag">按量</span>'}</h3>
       <div class="rows">
         ${planLine}
@@ -325,6 +326,7 @@ function renderCards() {
     </div>`;
   }).join('');
   document.getElementById('cards').innerHTML = cardsHtml;
+  applyCardOrder('cards');
 }
 
 // 模型分类费用：按工具聚合行 + 可展开的模型明细
@@ -390,13 +392,16 @@ function renderModelCosts() {
 function renderChart() {
   const daysList = snap.agg.dailyKeys.slice(-30);
   const W = 1100, H = 220, P = { l: 50, r: 12, t: 12, b: 24 };
-  const maxV = Math.max(1, ...daysList.map(d => {
+  const rawMax = Math.max(1, ...daysList.map(d => {
     const t = snap.agg.daily[d];
     if (!t) return 0;
     return t.__total ? cny(t.__total) : 0;
   }));
+  // Y 轴取整刻度：向上取到半个数量级的整数倍（¥127 → ¥150，¥253 → ¥300）
+  const mag = Math.pow(10, Math.floor(Math.log10(rawMax)));
+  const maxV = Math.ceil(rawMax / (mag / 2)) * (mag / 2);
   const bw = (W - P.l - P.r) / Math.max(daysList.length, 1);
-  const colors = { codex: '#4f8ef7', claudeDesktop: '#9b7ef2', claudeCode: '#5bc8d8', zcode: '#34b374', workbuddy: '#e0a23c' };
+  const colors = { codex: '#2dd6f5', claudeDesktop: '#a78bfa', claudeCode: '#f472b6', zcode: '#34d399', workbuddy: '#fbbf24' };
   let bars = '';
   daysList.forEach((d, i) => {
     let y = H - P.b;
@@ -487,7 +492,7 @@ document.getElementById('settingsBtn').onclick = async () => {
   const qk = p.quotaKeys || {};
   document.getElementById('settingsBody').innerHTML =
     `<label>USD → CNY 汇率</label><input id="sFx" type="number" step="0.01" value="${p.usdCnyRate}">` +
-    `<label>🎯 今日产出目标（等价 ¥/天，鼓励用）</label><input id="sGoal" type="number" step="10" min="0" value="${(p.dailyGoal || {}).cny ?? 200}">` +
+    `<label>🎯 当日目标成本（等价 ¥/天）</label><input id="sGoal" type="number" step="10" min="0" value="${(p.dailyGoal || {}).cny ?? 200}">` +
     Object.entries(p.plans).map(([k, v]) =>
       `<label>${v.label} · 月额度（等价 ¥，留空 = 未配置）</label>
        <input data-plan="${k}" type="number" step="0.01" value="${v.cnyPerMonth ?? ''}" placeholder="未配置">`
@@ -504,6 +509,7 @@ document.getElementById('settingsBtn').onclick = async () => {
   };
 };
 document.getElementById('settingsCancel').onclick = () => dlg.close();
+document.getElementById('settingsX').onclick = () => dlg.close();
 document.getElementById('settingsSave').onclick = async () => {
   const plans = {};
   document.querySelectorAll('[data-plan]').forEach(el => {
@@ -535,6 +541,120 @@ document.getElementById('daySeg').addEventListener('click', e => {
     load();
   }
 });
+
+// ---------- 卡片拖拽排序（Pointer Events 实现 + localStorage 持久化） ----------
+// 不用 HTML5 DnD：合成事件无法触发原生 dragstart，且 Pointer 方案支持触控笔、动效完全可控
+const dragGhost = document.getElementById('dragGhost');
+let drag = null; // { card, container, id, startX, startY, active }
+
+function cardOrderKey(id) { return 'aqd:order:' + id; }
+// 渲染后按已保存顺序重排（新出现的卡片追加在末尾）
+function applyCardOrder(id) {
+  const c = document.getElementById(id);
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(cardOrderKey(id)) || 'null'); } catch { saved = null; }
+  if (!Array.isArray(saved) || !saved.length) return;
+  const byKey = {};
+  for (const el of [...c.children]) if (el.dataset.key) byKey[el.dataset.key] = el;
+  for (const k of saved) if (byKey[k]) { c.appendChild(byKey[k]); delete byKey[k]; }
+}
+function persistCardOrder(id) {
+  localStorage.setItem(cardOrderKey(id),
+    JSON.stringify([...document.getElementById(id).children].map(el => el.dataset.key)));
+}
+// 网格布局下找坐标最近的卡片作为插入参照
+function nearestCard(c, x, y) {
+  let best = null, bestD = Infinity;
+  for (const el of c.querySelectorAll('.card')) {
+    if (el === drag.card) continue;
+    const r = el.getBoundingClientRect();
+    const dx = x - (r.left + r.width / 2), dy = y - (r.top + r.height / 2);
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = el; }
+  }
+  return best;
+}
+function enableCardDnD(id) {
+  const c = document.getElementById(id);
+  c.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.pointerType === 'touch') return; // 触摸留给页面滚动
+    const card = e.target.closest('.card');
+    if (!card || !c.contains(card)) return;
+    drag = { card, container: c, id, startX: e.clientX, startY: e.clientY, active: false };
+  });
+}
+document.addEventListener('pointermove', e => {
+  if (!drag) return;
+  if (!drag.active) {
+    // 位移超过 6px 才算拖拽，避免误伤点击
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 6) return;
+    drag.active = true;
+    drag.card.classList.add('dragging');
+    document.body.classList.add('dragging-any');
+    const h3 = drag.card.querySelector('h3');
+    dragGhost.textContent = '⟪ ' + (h3 ? h3.textContent.trim() : '') + ' ⟫';
+    dragGhost.style.display = 'block';
+  }
+  e.preventDefault();
+  dragGhost.style.left = e.clientX + 18 + 'px';
+  dragGhost.style.top = e.clientY - 34 + 'px';
+  const target = nearestCard(drag.container, e.clientX, e.clientY);
+  if (!target) { drag.container.appendChild(drag.card); return; }
+  const r = target.getBoundingClientRect();
+  const before = e.clientX < r.left + r.width / 2;
+  drag.container.insertBefore(drag.card, before ? target : target.nextSibling);
+}, { passive: false });
+document.addEventListener('pointerup', () => {
+  if (!drag) return;
+  if (drag.active) {
+    drag.card.classList.remove('dragging');
+    document.body.classList.remove('dragging-any');
+    dragGhost.style.display = 'none';
+    persistCardOrder(drag.id);
+  }
+  drag = null;
+});
+document.addEventListener('pointercancel', () => {
+  if (drag) {
+    drag.card.classList.remove('dragging');
+    document.body.classList.remove('dragging-any');
+    dragGhost.style.display = 'none';
+  }
+  drag = null;
+});
+enableCardDnD('cards');
+enableCardDnD('quotaCards');
+
+// ---------- 星野背景（canvas，低调闪烁） ----------
+(function starfield() {
+  const cv = document.getElementById('fx');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  let W, H, stars = [];
+  function resize() {
+    W = cv.width = innerWidth; H = cv.height = innerHeight;
+    const n = Math.min(170, Math.floor(W * H / 11000));
+    stars = Array.from({ length: n }, () => ({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.2 + 0.3, p: Math.random() * Math.PI * 2,
+      s: 0.3 + Math.random() * 1.1, blue: Math.random() < 0.18,
+    }));
+  }
+  resize();
+  addEventListener('resize', resize);
+  (function draw(t) {
+    ctx.clearRect(0, 0, W, H);
+    for (const st of stars) {
+      ctx.globalAlpha = 0.16 + 0.5 * (0.5 + 0.5 * Math.sin(st.p + t / 1000 * st.s));
+      ctx.fillStyle = st.blue ? '#9fd8ff' : '#e8eeff';
+      ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 7); ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  })(0);
+})();
+
+// 入场动效只播一次：1.6s 后摘除标记，避免 60s 自动刷新时整页闪动
+setTimeout(() => document.body.classList.remove('anim-once'), 1600);
 
 load();
 setInterval(load, 60_000);

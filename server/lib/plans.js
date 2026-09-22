@@ -17,7 +17,7 @@ const TEMPLATE = {
     workbuddy:     { label: 'WorkBuddy',       plan: null, cnyPerDay: null, cnyPerMonth: null },
   },
   priceOverrides: {},
-  // 今日产出目标（等价成本 ¥）：网页横幅 / 菜单栏 / 桌面卡片的鼓励进度条
+  // 当日目标成本（等价成本 ¥）：网页横幅 / 菜单栏 / 桌面卡片的预算进度条
   dailyGoal: { cny: 200 },
   // 套餐实时额度的手动 key 配置：非空优先，留空回退各采集器的自动发现
   quotaKeys: {

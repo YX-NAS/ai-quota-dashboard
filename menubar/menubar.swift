@@ -89,18 +89,18 @@ func bjWeekStart() -> String {
 }
 
 var lastFetchError: String? = "尚未获取"
-var todayGoalCny = 0.0 // 今日产出目标（plans.dailyGoal.cny，等价成本口径）
+var todayGoalCny = 0.0 // 当日目标成本（plans.dailyGoal.cny，等价成本口径）
 
-// 目标进度鼓励语（与网页同款分档）
+// 目标成本进度提示语（与网页同款分档）
 func goalMessage(_ pct: Double) -> String {
     switch pct {
-    case ..<1: return "新的一天，等你点火 🚀"
-    case ..<25: return "热身中，思路冒泡 💭"
-    case ..<50: return "渐入佳境，火花积聚 ✨"
-    case ..<75: return "火力全开，脑洞大开 🌀"
-    case ..<100: return "冲刺！火花四射就在眼前 🔥"
-    case ..<150: return "达标！今日火花四射 🎆"
-    default: return "超神发挥，刹不住车 🏆"
+    case ..<1: return "新的一天，预算就位 🚀"
+    case ..<25: return "预算充裕，安心干活 💭"
+    case ..<50: return "消耗平稳，余量尚多 ✨"
+    case ..<75: return "已用过半，留意节奏 🌀"
+    case ..<100: return "预算将尽，要紧的优先 ⚠️"
+    case ..<150: return "目标成本已用完 💸"
+    default: return "已大幅超出目标成本 🚨"
     }
 }
 
@@ -113,11 +113,11 @@ func notifyGoalMilestone(pct: Double, spent: Double) {
     var stage = UserDefaults.standard.integer(forKey: "goalNotifyStage")
     if pct >= 50 && stage < 50 {
         stage = 50
-        notifyOSX("今日产出过半 ✨", String(format: "已 ¥%.0f / ¥%.0f，火花正在积聚，继续！", spent, todayGoalCny))
+        notifyOSX("今日成本已过半 🌀", String(format: "已 ¥%.0f / 目标 ¥%.0f，留意消耗节奏", spent, todayGoalCny))
     }
     if pct >= 100 && stage < 100 {
         stage = 100
-        notifyOSX("🎯 今日产出目标达成！", String(format: "已跑够 ¥%.0f 的 token · 火花四射 🎆", todayGoalCny))
+        notifyOSX("🎯 当日目标成本已用完 💸", String(format: "已花 ¥%.0f · 达到目标 ¥%.0f，继续跑将超出", spent, todayGoalCny))
     }
     UserDefaults.standard.set(stage, forKey: "goalNotifyStage")
 }
@@ -255,29 +255,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateTitle() {
         guard let btn = statusItem.button else { return }
-        // 高对比度：加粗 + 系统标签色（状态栏默认正文色，禁用置灰效果）
         btn.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold),
-        ]
-        if !lastOK {
-            btn.attributedTitle = NSAttributedString(string: "⚡︎ --", attributes: attrs)
-        } else {
-            // 金额 + 目标进度 + 最紧张的 5h 窗口百分比；额度紧张时整体变警示色
-            var goalPart = ""
-            if todayGoalCny > 0 {
-                goalPart = goalPct >= 100 ? " 🎆" : String(format: " ·%.0f%%", goalPct)
-            }
-            var suffix = ""
-            var warning = false
-            if let tightest = planQuotas.compactMap({ $0.fiveHour.usedPercent }).max() {
-                suffix = " ·5h\(tightest)%"
-                warning = tightest > 85
-            }
-            let text = "⚡︎ " + fmtCny(todayTotal.cny) + goalPart + suffix
-            let finalAttrs = warning ? attrs.merging([.foregroundColor: NSColor.systemRed]) { $1 } : attrs
-            btn.attributedTitle = NSAttributedString(string: text, attributes: finalAttrs)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
+        // 多巴胺配色：分段上色（金黄闪电 / 青色金额 / 目标与额度按紧张度分档）
+        let gold = NSColor(red: 1.0, green: 0.84, blue: 0.10, alpha: 1)
+        let cyan = NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1)
+        let pink = NSColor(red: 1.0, green: 0.29, blue: 0.51, alpha: 1)
+        let orange = NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1)
+        let lime = NSColor(red: 0.71, green: 1.0, blue: 0.25, alpha: 1)
+        let amber = NSColor(red: 1.0, green: 0.77, blue: 0.10, alpha: 1)
+        let text = NSMutableAttributedString()
+        func seg(_ s: String, _ color: NSColor) {
+            text.append(NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color]))
         }
+        if !lastOK {
+            seg("⚡︎ --", .systemGray)
+        } else {
+            seg("⚡", gold)
+            seg(fmtCny(todayTotal.cny), cyan)
+            if todayGoalCny > 0 {
+                let gc: NSColor = goalPct >= 100 ? pink : goalPct >= 75 ? orange : lime
+                seg(goalPct >= 100 ? " 💸" : String(format: " ·%.0f%%", goalPct), gc)
+            }
+            if let tightest = planQuotas.compactMap({ $0.fiveHour.usedPercent }).max() {
+                let qc: NSColor = tightest > 85 ? .systemRed : tightest > 60 ? amber : cyan
+                seg(" ·5h\(tightest)%", qc)
+            }
+        }
+        btn.attributedTitle = text
         try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-")".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
     }
 
@@ -285,13 +290,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         // 信息行辅助：保持 enabled（避免系统置灰），上彩色
-        // 工具行配色（暗色菜单栏下选高亮度系）
+        // 工具行多巴胺配色（高饱和高亮度，暗/亮菜单栏下都跳眼）
         let toolColors: [String: NSColor] = [
-            "ChatGPT·Codex": .systemGreen,
-            "Claude Desktop": .systemOrange,
-            "Claude Code": .systemPurple,
-            "ZCode": .systemCyan,
-            "WorkBuddy": .systemBlue,
+            "ChatGPT·Codex": NSColor(red: 0.71, green: 1.0, blue: 0.25, alpha: 1),   // 青柠
+            "Claude Desktop": NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1),  // 橙
+            "Claude Code": NSColor(red: 1.0, green: 0.29, blue: 0.51, alpha: 1),     // 多巴胺粉
+            "ZCode": NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1),           // 青
+            "WorkBuddy": NSColor(red: 0.78, green: 0.57, blue: 1.0, alpha: 1),       // 紫
         ]
 
         func infoItem(_ title: String, color: NSColor = .labelColor, bold: Bool = false, mono: Bool = true) -> NSMenuItem {
@@ -307,7 +312,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return m
         }
 
-        infoItem("⚡ 今日 AI 用量（北京时间）", color: .systemYellow, bold: true, mono: false)
+        let gold = NSColor(red: 1.0, green: 0.84, blue: 0.10, alpha: 1)
+        let cyan = NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1)
+        infoItem("⚡ 今日 AI 用量（北京时间）", color: gold, bold: true, mono: false)
         menu.addItem(.separator())
 
         if toolRows.isEmpty {
@@ -335,8 +342,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(m)
             }
             menu.addItem(.separator())
-            infoItem(String(format: "合计 %d 次 · %@ · 等价 %@", todayTotal.req, fmtTok(todayTotal.tok) as NSString, fmtCny(todayTotal.cny) as NSString), color: .systemYellow, bold: true)
-            infoItem(String(format: "本周（周一起）等价 %@", fmtCny(weekCny) as NSString), color: .systemYellow, bold: true)
+            infoItem(String(format: "合计 %d 次 · %@ · 等价 %@", todayTotal.req, fmtTok(todayTotal.tok) as NSString, fmtCny(todayTotal.cny) as NSString), color: gold, bold: true)
+            infoItem(String(format: "本周（周一起）等价 %@", fmtCny(weekCny) as NSString), color: gold, bold: true)
             if ySameCny > 0.005 {
                 let d = todayTotal.cny / ySameCny * 100 - 100
                 let color: NSColor = d >= 0 ? .systemGreen : .systemOrange
@@ -346,13 +353,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 infoItem(String(format: "真实扣费 $%.2f（其余为套餐等价）", realPay), color: .systemRed, bold: true)
             }
 
-            // 今日产出目标（方块进度条 + 鼓励语）
+            // 当日目标成本（方块进度条 + 提示语）：绿=余量健康，橙=接近目标，红=已用完/超出
             if todayGoalCny > 0 {
                 menu.addItem(.separator())
                 let filled = Int((goalPct / 100 * 10).rounded(.down))
                 let bar = String(repeating: "▓", count: max(0, min(filled, 10))) + String(repeating: "░", count: 10 - max(0, min(filled, 10)))
-                let color: NSColor = goalPct >= 100 ? .systemGreen : goalPct >= 75 ? .systemYellow : .systemOrange
-                infoItem(String(format: "🎯 目标 %@ %.0f%%  ¥%.0f/¥%.0f", bar as NSString, goalPct, todayTotal.cny, todayGoalCny), color: color, bold: true)
+                let color: NSColor = goalPct >= 100 ? .systemRed : goalPct >= 75 ? .systemOrange : .systemGreen
+                infoItem(String(format: "🎯 成本 %@ %.0f%%  ¥%.0f/¥%.0f", bar as NSString, goalPct, todayTotal.cny, todayGoalCny), color: color, bold: true)
                 infoItem("   " + goalMessage(goalPct), color: color, mono: false)
             }
         }
@@ -360,7 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 套餐实时额度区块
         if !planQuotas.isEmpty {
             menu.addItem(.separator())
-            infoItem("📶 套餐实时额度", color: .systemTeal, bold: true, mono: false)
+            infoItem("📶 套餐实时额度", color: cyan, bold: true, mono: false)
             for q in planQuotas {
                 if let u5 = q.fiveHour.usedPercent {
                     // 按最紧的窗口选色：绿(<60) 黄(60-85) 红(>85)

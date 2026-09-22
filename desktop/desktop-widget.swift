@@ -47,16 +47,16 @@ func bjWeekStart() -> String {
     f.timeZone = cal.timeZone
     return f.string(from: monday)
 }
-// 目标鼓励语（与网页/菜单栏同款分档）
+// 目标成本进度提示语（与网页/菜单栏同款分档，预算口径）
 func goalMessage(_ pct: Double) -> String {
     switch pct {
-    case ..<1: return "新的一天，等你点火 🚀"
-    case ..<25: return "热身中，思路冒泡 💭"
-    case ..<50: return "渐入佳境，火花积聚 ✨"
-    case ..<75: return "火力全开，脑洞大开 🌀"
-    case ..<100: return "冲刺！火花四射就在眼前 🔥"
-    case ..<150: return "达标！今日火花四射 🎆"
-    default: return "超神发挥，刹不住车 🏆"
+    case ..<1: return "新的一天，预算就位 🚀"
+    case ..<25: return "预算充裕，安心干活 💭"
+    case ..<50: return "消耗平稳，余量尚多 ✨"
+    case ..<75: return "已用过半，留意节奏 🌀"
+    case ..<100: return "预算将尽，要紧的优先 ⚠️"
+    case ..<150: return "目标成本已用完 💸"
+    default: return "已大幅超出目标成本 🚨"
     }
 }
 
@@ -138,20 +138,45 @@ struct Bar: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 Spacer()
                 if let p = pct {
                     Text("\(p)% · \(fmtReset(reset))").font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(p > 85 ? Color.red : Color.secondary)
+                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 } else { Text("—").font(.system(size: 10)).foregroundStyle(.secondary) }
             }
             GeometryReader { g in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.12))
-                    Capsule().fill(barColor(pct ?? 0))
-                        .frame(width: pct != nil ? g.size.width * CGFloat(min(pct!, 100)) / 100 : 0)
+                    Capsule().fill(
+                        LinearGradient(colors: [barColor(pct ?? 0).opacity(0.75), barColor(pct ?? 0)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    )
+                    .shadow(color: barColor(pct ?? 0).opacity(0.55), radius: 2.5)
+                    .frame(width: pct != nil ? g.size.width * CGFloat(min(pct!, 100)) / 100 : 0)
                 }
             }.frame(height: 4)
         }
+    }
+}
+
+// 金额主数：火焰渐变 + 光晕（与网页横幅同款渐变语言）
+struct AmountText: View {
+    let value: Double
+    let size: CGFloat
+    var body: some View {
+        Text("¥\(value, specifier: "%.2f")")
+            .font(.system(size: size, weight: .semibold, design: .rounded))
+            .foregroundStyle(
+                LinearGradient(colors: [
+                    Color(red: 1.0, green: 0.78, blue: 0.25),
+                    Color(red: 1.0, green: 0.45, blue: 0.42),
+                    Color(red: 0.91, green: 0.47, blue: 0.98),
+                ], startPoint: .leading, endPoint: .trailing)
+            )
+            .shadow(color: Color(red: 1.0, green: 0.45, blue: 0.42).opacity(0.4), radius: 5)
+            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -196,14 +221,14 @@ struct CardView: View {
                 Text("看板服务未响应\n启动: node server/index.js")
                     .font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
             } else if store.data.collapsed {
-                // 折叠态：费用 + 总 token + 各套餐 5h 百分比
+                // 折叠态：费用 + 总 token + 各套餐 5h 百分比（所有字段单行）
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("¥\(store.data.cny, specifier: "%.2f")")
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        AmountText(value: store.data.cny, size: 17)
                         if store.data.payUsd > 0.005 {
                             Text(String(format: "实扣 $%.2f", store.data.payUsd))
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         } else {
                             Text("套餐内").font(.system(size: 10)).foregroundStyle(.green)
                         }
@@ -211,6 +236,7 @@ struct CardView: View {
                     }
                     Text("\(store.data.req) 次 · \(fmtTok(store.data.tok)) tokens")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     HStack(spacing: 10) {
                         Text("5h").font(.system(size: 10)).foregroundStyle(.tertiary)
                         ForEach(store.data.quotas, id: \.shortName) { q in
@@ -221,6 +247,7 @@ struct CardView: View {
                                     .font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(q.fiveHour.usedPercent.map(barColor) ?? Color.secondary)
                             }
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         }
                     }
                     if store.data.goalCny > 0 {
@@ -228,27 +255,34 @@ struct CardView: View {
                                     store.data.goalPct >= 100 ? "🎆" : ""))
                             .font(.system(size: 10))
                             .foregroundStyle(store.data.goalPct >= 100 ? .green : .orange)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .allowsTightening(true)
                     }
                 }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("¥\(store.data.cny, specifier: "%.2f")")
-                        .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    AmountText(value: store.data.cny, size: 26)
                     if store.data.payUsd > 0.005 {
                         Text(String(format: "实扣 $%.2f", store.data.payUsd))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     } else {
                         Text("全部在套餐内").font(.system(size: 10)).foregroundStyle(.green)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     }
                     Spacer()
                 }
                 Text("\(store.data.req) 次 · \(fmtTok(store.data.tok)) tokens")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 Text(String(format: "本周累计 ¥%.2f（周一起）", store.data.weekCny))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                 ForEach(store.data.quotas, id: \.shortName) { q in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(q.shortName).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         Bar(label: "5h", pct: q.fiveHour.usedPercent, reset: q.fiveHour.resetMsLeft)
                         Bar(label: "周", pct: q.weekly.usedPercent, reset: q.weekly.resetMsLeft)
                     }
@@ -256,25 +290,45 @@ struct CardView: View {
                 if store.data.goalCny > 0 {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text("🎯 今日产出目标").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                            Text("🎯 当日目标成本").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                             Spacer()
                             Text(store.data.goalPct >= 100 ? "💯" : String(format: "%.0f%%", store.data.goalPct))
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(store.data.goalPct >= 100 ? .green : .orange)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         }
                         Bar(label: "¥", pct: Int(min(store.data.goalPct, 100)), reset: nil)
                         Text(goalMessage(store.data.goalPct))
                             .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .allowsTightening(true)
                     }
                     .padding(.top, 2)
                 }
             }
         }
         .padding(14)
-        .frame(width: 246)
+        .frame(width: 262)
         .background(HeightProbe())   // 上报内容真实高度 → 窗口自适应
         .background(VisualEffectBlur())
-        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+        .overlay(
+            // 霓虹渐变描边 + 柔和光晕
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(
+                    AngularGradient(colors: [
+                        Color(red: 0.18, green: 0.84, blue: 0.96),
+                        Color(red: 0.43, green: 0.49, blue: 1.0),
+                        Color(red: 0.91, green: 0.47, blue: 0.98),
+                        Color(red: 1.0, green: 0.7, blue: 0.25),
+                        Color(red: 0.18, green: 0.84, blue: 0.96),
+                    ], center: .center),
+                    lineWidth: 1.2
+                )
+                .opacity(0.65)
+        )
+        .shadow(color: Color(red: 0.43, green: 0.49, blue: 1.0).opacity(0.30), radius: 14)
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 }
@@ -341,7 +395,7 @@ final class WidgetAppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     let store = DataStore()
     let positionKey = "AIQuotaWidgetFrame"
-    static let cardWidth: CGFloat = 246
+    static let cardWidth: CGFloat = 262
 
     // 窗口高度 = SwiftUI 内容自适应（NSHostingView 内建约束自动贴合；此方法作为兜底，上边缘锚定）
     func setHeight(_ h: CGFloat, animated: Bool) {

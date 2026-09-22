@@ -11,7 +11,7 @@
 
 This dashboard turns those questions into one screen of numbers. It quietly reads the local records of ZCode, Claude Code, Codex and WorkBuddy on your machine, prices every request, and watches every quota window — **nothing ever leaves your computer**.
 
-![Dashboard overview: daily goal + KPIs + per-tool cards](docs/screenshots/dashboard.png)
+![Dashboard overview: daily cost target + KPIs + per-tool cards](docs/screenshots/dashboard.png)
 
 > The UI is in Chinese (dates follow Asia/Shanghai). PRs to internationalize the web UI are welcome. Screenshots above use **demo data**.
 
@@ -30,7 +30,7 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 ![Settings panel](docs/screenshots/settings.png)
 
 - 💸 **Today's spend**: one card per tool with today / week / month costs; subscription tools get an "equivalent pay-as-you-go" estimate so they're comparable with metered ones
-- 🎯 **Daily output goal**: set ¥200/day and watch the banner, the menu-bar percentage, and the fireworks when you hit it (real system notifications 🎆)
+- 🎯 **Daily cost target**: set a ¥200/day budget and track remaining budget plus projected exhaustion time in the banner, the percentage in the menu bar, and a system notification when it's used up (💸)
 - 🆚 **vs yesterday**: same-time comparison, green when you're shipping more
 - 🔌 **MCP server**: let ZCode / Claude Code / Codex answer "how much quota did I burn this week?"
 

@@ -158,15 +158,15 @@ async function callTool(name, args) {
     }
     lines.push(`本周累计（周一起）: ${fmtCny(weekSpent)}`);
 
-    // 今日产出目标进度
+    // 当日目标成本进度
     const goal = (plans.dailyGoal || {}).cny;
     if (goal > 0) {
       const spent = cnyOf(t && t.__total || {});
       const pct = spent / goal * 100;
-      const tier = pct >= 150 ? '🏆 超神发挥，刹不住车' : pct >= 100 ? '🎆 目标达成，火花四射！'
-        : pct >= 75 ? '🔥 冲刺！就在眼前' : pct >= 50 ? '🌀 火力全开，脑洞大开' : pct >= 25 ? '✨ 渐入佳境' : '💭 热身中，等你点火';
+      const tier = pct >= 150 ? '🚨 已大幅超出，记得收敛或上调目标' : pct >= 100 ? '💸 目标成本已用完，再跑要超支'
+        : pct >= 75 ? '⚠️ 预算将尽，要紧的优先' : pct >= 50 ? '🌀 已用过半，留意节奏' : pct >= 25 ? '✨ 消耗平稳，余量尚多' : '💭 预算充裕，安心干活';
       lines.push('');
-      lines.push(`🎯 今日产出目标: ${fmtCny(spent)} / ¥${goal}（${pct.toFixed(0)}%）· ${tier}`);
+      lines.push(`🎯 当日目标成本: ${fmtCny(spent)} / ¥${goal}（${pct.toFixed(0)}%）· ${tier}`);
     }
     return { text: lines.join('\n') };
   }
