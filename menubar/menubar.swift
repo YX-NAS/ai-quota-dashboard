@@ -448,6 +448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let webItem = NSMenuItem(title: "打开看板网页", action: #selector(openWeb), keyEquivalent: "w")
         webItem.target = self
         menu.addItem(webItem)
+        let widgetItem = NSMenuItem(title: "打开桌面卡片", action: #selector(openWidget), keyEquivalent: "d")
+        widgetItem.target = self
+        menu.addItem(widgetItem)
         let refreshItem = NSMenuItem(title: "立即刷新", action: #selector(doRefresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
@@ -464,6 +467,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openWeb() {
         if let url = URL(string: "http://localhost:7788") { NSWorkspace.shared.open(url) }
+    }
+    @objc func openWidget() {
+        // 优先找与菜单栏 app 同仓库的 desktop/AIQuotaWidget.app（bundlePath 在 menubar/ 下，需上跳两级到仓库根）
+        let sibling = (Bundle.main.bundlePath as NSString).appendingPathComponent("../../desktop/AIQuotaWidget.app")
+        let path = (sibling as NSString).standardizingPath
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        } else {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            p.arguments = ["-a", "AIQuotaWidget"]
+            try? p.run()
+        }
     }
     @objc func quit() { NSApp.terminate(nil) }
 }
