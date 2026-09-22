@@ -188,6 +188,52 @@ func fmtTok(_ v: Int) -> String {
     return "\(v)"
 }
 
+// ---------- 多巴胺配色（跟随菜单亮/暗外观自适应，保证对比度） ----------
+// 教训：菜单弹层跟随系统外观（亮色系统的菜单是浅底），固定高亮色在浅底上不可读
+struct Palette {
+    let gold: NSColor      // 标题/合计
+    let cyan: NSColor      // 金额/额度区块标题
+    let pink: NSColor      // 超支警示
+    let orange: NSColor    // 接近阈值
+    let lime: NSColor      // 健康态
+    let violet: NSColor    // WorkBuddy
+    let money: NSColor     // 金额高亮（暗色=白，亮色=标签色）
+    let tierGood: NSColor  // 额度/成本健康
+    let tierMid: NSColor   // 接近阈值
+    let tierHigh: NSColor  // 已超/紧急
+}
+func dopaminePalette(dark: Bool) -> Palette {
+    if dark {
+        return Palette(
+            gold: NSColor(red: 1.0, green: 0.84, blue: 0.10, alpha: 1),
+            cyan: NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1),
+            pink: NSColor(red: 1.0, green: 0.29, blue: 0.51, alpha: 1),
+            orange: NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1),
+            lime: NSColor(red: 0.71, green: 1.0, blue: 0.25, alpha: 1),
+            violet: NSColor(red: 0.78, green: 0.57, blue: 1.0, alpha: 1),
+            money: .white,
+            tierGood: NSColor(red: 0.35, green: 0.95, blue: 0.55, alpha: 1),
+            tierMid: NSColor(red: 1.0, green: 0.77, blue: 0.10, alpha: 1),
+            tierHigh: NSColor(red: 1.0, green: 0.33, blue: 0.33, alpha: 1))
+    }
+    // 亮色菜单：同名色相的深色版，浅底上对比度 ≥ 4.5:1
+    return Palette(
+        gold: NSColor(red: 0.65, green: 0.47, blue: 0.00, alpha: 1),
+        cyan: NSColor(red: 0.00, green: 0.50, blue: 0.70, alpha: 1),
+        pink: NSColor(red: 0.80, green: 0.04, blue: 0.40, alpha: 1),
+        orange: NSColor(red: 0.75, green: 0.36, blue: 0.00, alpha: 1),
+        lime: NSColor(red: 0.28, green: 0.50, blue: 0.00, alpha: 1),
+        violet: NSColor(red: 0.46, green: 0.21, blue: 0.80, alpha: 1),
+        money: .labelColor,
+        tierGood: NSColor(red: 0.00, green: 0.48, blue: 0.25, alpha: 1),
+        tierMid: NSColor(red: 0.68, green: 0.43, blue: 0.00, alpha: 1),
+        tierHigh: NSColor(red: 0.78, green: 0.08, blue: 0.12, alpha: 1))
+}
+func isDarkAppearance(_ a: NSAppearance?) -> Bool {
+    guard let best = a?.bestMatch(from: [NSAppearance.Name.aqua, NSAppearance.Name.darkAqua]) else { return false }
+    return best == .darkAqua
+}
+
 // ---------- 菜单栏应用 ----------
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -206,6 +252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "claudeCode": "Claude Code", "zcode": "ZCode", "workbuddy": "WorkBuddy",
     ]
 
+    // 当前生效的多巴胺配色（跟随状态栏按钮/系统的亮暗外观）
+    var pal: Palette {
+        dopaminePalette(dark: isDarkAppearance(statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance))
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -213,6 +264,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh(nil)
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh(nil)
+        }
+        // 系统亮暗切换时立即换配色（弹层背景跟随系统外观，配色必须同步换）
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self?.updateTitle()
+                self?.rebuildMenu()
+            }
         }
     }
 
@@ -257,13 +318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let btn = statusItem.button else { return }
         btn.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
-        // 多巴胺配色：分段上色（金黄闪电 / 青色金额 / 目标与额度按紧张度分档）
-        let gold = NSColor(red: 1.0, green: 0.84, blue: 0.10, alpha: 1)
-        let cyan = NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1)
-        let pink = NSColor(red: 1.0, green: 0.29, blue: 0.51, alpha: 1)
-        let orange = NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1)
-        let lime = NSColor(red: 0.71, green: 1.0, blue: 0.25, alpha: 1)
-        let amber = NSColor(red: 1.0, green: 0.77, blue: 0.10, alpha: 1)
+        // 多巴胺配色（自适应亮暗）：金黄闪电 + 主题色金额 + 目标/额度按紧张度分档
+        let c = pal
         let text = NSMutableAttributedString()
         func seg(_ s: String, _ color: NSColor) {
             text.append(NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color]))
@@ -271,32 +327,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !lastOK {
             seg("⚡︎ --", .systemGray)
         } else {
-            seg("⚡", gold)
-            seg(fmtCny(todayTotal.cny), cyan)
+            seg("⚡", c.gold)
+            seg(fmtCny(todayTotal.cny), c.cyan)
             if todayGoalCny > 0 {
-                let gc: NSColor = goalPct >= 100 ? pink : goalPct >= 75 ? orange : lime
+                let gc: NSColor = goalPct >= 100 ? c.pink : goalPct >= 75 ? c.orange : c.lime
                 seg(goalPct >= 100 ? " 💸" : String(format: " ·%.0f%%", goalPct), gc)
             }
             if let tightest = planQuotas.compactMap({ $0.fiveHour.usedPercent }).max() {
-                let qc: NSColor = tightest > 85 ? .systemRed : tightest > 60 ? amber : cyan
+                let qc: NSColor = tightest > 85 ? c.tierHigh : tightest > 60 ? c.tierMid : c.cyan
                 seg(" ·5h\(tightest)%", qc)
             }
         }
         btn.attributedTitle = text
-        try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-")".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
+        try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-") dark=\(isDarkAppearance(btn.effectiveAppearance))".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
     }
 
     func rebuildMenu() {
         let menu = NSMenu()
 
         // 信息行辅助：保持 enabled（避免系统置灰），上彩色
-        // 工具行多巴胺配色（高饱和高亮度，暗/亮菜单栏下都跳眼）
+        // 多巴胺配色（自适应亮暗外观）
+        let c = pal
         let toolColors: [String: NSColor] = [
-            "ChatGPT·Codex": NSColor(red: 0.71, green: 1.0, blue: 0.25, alpha: 1),   // 青柠
-            "Claude Desktop": NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1),  // 橙
-            "Claude Code": NSColor(red: 1.0, green: 0.29, blue: 0.51, alpha: 1),     // 多巴胺粉
-            "ZCode": NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1),           // 青
-            "WorkBuddy": NSColor(red: 0.78, green: 0.57, blue: 1.0, alpha: 1),       // 紫
+            "ChatGPT·Codex": c.lime,
+            "Claude Desktop": c.orange,
+            "Claude Code": c.pink,
+            "ZCode": c.cyan,
+            "WorkBuddy": c.violet,
         ]
 
         func infoItem(_ title: String, color: NSColor = .labelColor, bold: Bool = false, mono: Bool = true) -> NSMenuItem {
@@ -312,9 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return m
         }
 
-        let gold = NSColor(red: 1.0, green: 0.84, blue: 0.10, alpha: 1)
-        let cyan = NSColor(red: 0.20, green: 0.86, blue: 1.0, alpha: 1)
-        infoItem("⚡ 今日 AI 用量（北京时间）", color: gold, bold: true, mono: false)
+        infoItem("⚡ 今日 AI 用量（北京时间）", color: c.gold, bold: true, mono: false)
         menu.addItem(.separator())
 
         if toolRows.isEmpty {
@@ -329,12 +384,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium),
                     .foregroundColor: color,
                 ]))
-                // 金额部分单独上白色粗体
+                // 金额部分单独高亮（暗色菜单=白，亮色菜单=标签色）
                 if let r = m.title.range(of: "¥") {
                     let money = String(m.title[r.lowerBound...])
                     let attr = NSAttributedString(string: "        " + money, attributes: [
                         .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold),
-                        .foregroundColor: NSColor.white,
+                        .foregroundColor: c.money,
                     ])
                     text.replaceCharacters(in: NSRange(location: m.title.utf16.count - money.utf16.count, length: money.utf16.count), with: attr)
                 }
@@ -342,15 +397,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(m)
             }
             menu.addItem(.separator())
-            infoItem(String(format: "合计 %d 次 · %@ · 等价 %@", todayTotal.req, fmtTok(todayTotal.tok) as NSString, fmtCny(todayTotal.cny) as NSString), color: gold, bold: true)
-            infoItem(String(format: "本周（周一起）等价 %@", fmtCny(weekCny) as NSString), color: gold, bold: true)
+            infoItem(String(format: "合计 %d 次 · %@ · 等价 %@", todayTotal.req, fmtTok(todayTotal.tok) as NSString, fmtCny(todayTotal.cny) as NSString), color: c.gold, bold: true)
+            infoItem(String(format: "本周（周一起）等价 %@", fmtCny(weekCny) as NSString), color: c.gold, bold: true)
             if ySameCny > 0.005 {
                 let d = todayTotal.cny / ySameCny * 100 - 100
-                let color: NSColor = d >= 0 ? .systemGreen : .systemOrange
+                let color: NSColor = d >= 0 ? c.tierGood : c.orange
                 infoItem(String(format: "昨日同期 %@ · 今日 %@%.0f%%", fmtCny(ySameCny) as NSString, d >= 0 ? "↑" : "↓", abs(d)), color: color, bold: true)
             }
             if realPay > 0.005 {
-                infoItem(String(format: "真实扣费 $%.2f（其余为套餐等价）", realPay), color: .systemRed, bold: true)
+                infoItem(String(format: "真实扣费 $%.2f（其余为套餐等价）", realPay), color: c.tierHigh, bold: true)
             }
 
             // 当日目标成本（方块进度条 + 提示语）：绿=余量健康，橙=接近目标，红=已用完/超出
@@ -358,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 menu.addItem(.separator())
                 let filled = Int((goalPct / 100 * 10).rounded(.down))
                 let bar = String(repeating: "▓", count: max(0, min(filled, 10))) + String(repeating: "░", count: 10 - max(0, min(filled, 10)))
-                let color: NSColor = goalPct >= 100 ? .systemRed : goalPct >= 75 ? .systemOrange : .systemGreen
+                let color: NSColor = goalPct >= 100 ? c.tierHigh : goalPct >= 75 ? c.orange : c.tierGood
                 infoItem(String(format: "🎯 成本 %@ %.0f%%  ¥%.0f/¥%.0f", bar as NSString, goalPct, todayTotal.cny, todayGoalCny), color: color, bold: true)
                 infoItem("   " + goalMessage(goalPct), color: color, mono: false)
             }
@@ -367,12 +422,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 套餐实时额度区块
         if !planQuotas.isEmpty {
             menu.addItem(.separator())
-            infoItem("📶 套餐实时额度", color: cyan, bold: true, mono: false)
+            infoItem("📶 套餐实时额度", color: c.cyan, bold: true, mono: false)
             for q in planQuotas {
                 if let u5 = q.fiveHour.usedPercent {
-                    // 按最紧的窗口选色：绿(<60) 黄(60-85) 红(>85)
+                    // 按最紧的窗口选色：绿(<60) 黄(60-85) 红(>85)，自适应亮暗
                     let pct = max(u5, q.weekly.usedPercent ?? 0)
-                    let color: NSColor = pct > 85 ? .systemRed : pct > 60 ? .systemYellow : .systemGreen
+                    let color: NSColor = pct > 85 ? c.tierHigh : pct > 60 ? c.tierMid : c.tierGood
                     let m = NSMenuItem(title: String(format: "  %@  5h %d%% %@ ｜ 周 %d%% %@", q.provider, u5, fmtReset(q.fiveHour.resetMsLeft), q.weekly.usedPercent ?? -1, fmtReset(q.weekly.resetMsLeft)), action: nil, keyEquivalent: "")
                     m.attributedTitle = NSAttributedString(string: m.title, attributes: [
                         .font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
