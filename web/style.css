@@ -293,6 +293,11 @@ dialog {
   box-shadow: 0 30px 90px rgba(0, 0, 0, .6), 0 0 40px rgba(109, 124, 255, .18);
   animation: dlgIn .28s cubic-bezier(.22, 1.4, .36, 1);
 }
+/* 弹窗滚动条换肤：半透明深色滑块（系统默认浅灰条在深色玻璃上掉档） */
+dialog::-webkit-scrollbar { width: 8px; }
+dialog::-webkit-scrollbar-track { background: transparent; }
+dialog::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 4px; }
+dialog::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, .24); }
 @keyframes dlgIn { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
 dialog::backdrop { background: rgba(3, 4, 12, .62); backdrop-filter: blur(4px); }
 dialog .dlg-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
