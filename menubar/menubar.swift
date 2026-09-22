@@ -234,6 +234,29 @@ func isDarkAppearance(_ a: NSAppearance?) -> Bool {
     return best == .darkAqua
 }
 
+// 状态栏标题专用：高亮多巴胺色 + 深色描边/投影（字幕级可读性）。
+// 菜单栏条的实际底色由壁纸+半透明材料决定，检测不可靠（系统外观和壁纸亮度都试过会踩反），
+// 高亮色 + 深色描边在亮/暗条上都清晰，无需检测。
+private let barGold = NSColor(red: 1.0, green: 0.84, blue: 0.04, alpha: 1)
+private let barSky = NSColor(red: 0.36, green: 0.84, blue: 1.0, alpha: 1)
+private let barPink = NSColor(red: 1.0, green: 0.48, blue: 0.72, alpha: 1)
+private let barOrange = NSColor(red: 1.0, green: 0.70, blue: 0.25, alpha: 1)
+private let barLime = NSColor(red: 0.71, green: 1.0, blue: 0.30, alpha: 1)
+private let barHigh = NSColor(red: 1.0, green: 0.35, blue: 0.35, alpha: 1)
+private let barMid = NSColor(red: 1.0, green: 0.77, blue: 0.24, alpha: 1)
+
+func barSegment(_ s: String, _ color: NSColor, font: NSFont) -> NSAttributedString {
+    let shadow = NSShadow()
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
+    shadow.shadowBlurRadius = 2.5
+    shadow.shadowOffset = NSSize(width: 0, height: 1)
+    return NSAttributedString(string: s, attributes: [
+        .font: font,
+        .foregroundColor: color,
+        .shadow: shadow,
+    ])
+}
+
 // ---------- 菜单栏应用 ----------
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
@@ -252,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "claudeCode": "Claude Code", "zcode": "ZCode", "workbuddy": "WorkBuddy",
     ]
 
-    // 当前生效的多巴胺配色（跟随状态栏按钮/系统的亮暗外观）
+    // 当前生效的多巴胺配色：菜单弹层跟随系统外观亮暗自适应
     var pal: Palette {
         dopaminePalette(dark: isDarkAppearance(statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance))
     }
@@ -318,28 +341,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let btn = statusItem.button else { return }
         btn.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
-        // 多巴胺配色（自适应亮暗）：金黄闪电 + 主题色金额 + 目标/额度按紧张度分档
-        let c = pal
+        // 高亮多巴胺色 + 深色投影：亮/暗菜单栏条上都清晰（不依赖外观检测）
         let text = NSMutableAttributedString()
-        func seg(_ s: String, _ color: NSColor) {
-            text.append(NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color]))
-        }
         if !lastOK {
-            seg("⚡︎ --", .systemGray)
+            text.append(barSegment("⚡︎ --", .systemGray, font: font))
         } else {
-            seg("⚡", c.gold)
-            seg(fmtCny(todayTotal.cny), c.cyan)
+            text.append(barSegment("⚡", barGold, font: font))
+            text.append(barSegment(fmtCny(todayTotal.cny), barSky, font: font))
             if todayGoalCny > 0 {
-                let gc: NSColor = goalPct >= 100 ? c.pink : goalPct >= 75 ? c.orange : c.lime
-                seg(goalPct >= 100 ? " 💸" : String(format: " ·%.0f%%", goalPct), gc)
+                let gc: NSColor = goalPct >= 100 ? barPink : goalPct >= 75 ? barOrange : barLime
+                text.append(barSegment(goalPct >= 100 ? " 💸" : String(format: " ·%.0f%%", goalPct), gc, font: font))
             }
             if let tightest = planQuotas.compactMap({ $0.fiveHour.usedPercent }).max() {
-                let qc: NSColor = tightest > 85 ? c.tierHigh : tightest > 60 ? c.tierMid : c.cyan
-                seg(" ·5h\(tightest)%", qc)
+                let qc: NSColor = tightest > 85 ? barHigh : tightest > 60 ? barMid : barSky
+                text.append(barSegment(" ·5h\(tightest)%", qc, font: font))
             }
         }
         btn.attributedTitle = text
-        try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-") dark=\(isDarkAppearance(btn.effectiveAppearance))".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
+        try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-")".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
     }
 
     func rebuildMenu() {
