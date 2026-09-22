@@ -229,10 +229,6 @@ func dopaminePalette(dark: Bool) -> Palette {
         tierMid: NSColor(red: 0.68, green: 0.43, blue: 0.00, alpha: 1),
         tierHigh: NSColor(red: 0.78, green: 0.08, blue: 0.12, alpha: 1))
 }
-func isDarkAppearance(_ a: NSAppearance?) -> Bool {
-    guard let best = a?.bestMatch(from: [NSAppearance.Name.aqua, NSAppearance.Name.darkAqua]) else { return false }
-    return best == .darkAqua
-}
 
 // 状态栏标题专用：高亮多巴胺色 + 深色描边/投影（字幕级可读性）。
 // 菜单栏条的实际底色由壁纸+半透明材料决定，检测不可靠（系统外观和壁纸亮度都试过会踩反），
@@ -275,10 +271,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         "claudeCode": "Claude Code", "zcode": "ZCode", "workbuddy": "WorkBuddy",
     ]
 
-    // 当前生效的多巴胺配色：菜单弹层跟随系统外观亮暗自适应
-    var pal: Palette {
-        dopaminePalette(dark: isDarkAppearance(statusItem.button?.effectiveAppearance ?? NSApp.effectiveAppearance))
-    }
+    // 当前生效的多巴胺配色：菜单固定为深色玻璃 + 亮色版色板。
+    // 不跟随系统亮暗——液态玻璃菜单的视觉底色由壁纸决定（跟系统模式无关），
+    // 绑定系统外观会在「深色系统 + 亮壁纸」时产出亮色文字踩浅玻璃的糊面。
+    // 固定深色玻璃后视觉恒定：永远是深底亮字，对比度有保证。
+    var pal: Palette { dopaminePalette(dark: true) }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -287,16 +284,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refresh(nil)
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh(nil)
-        }
-        // 系统亮暗切换时立即换配色（弹层背景跟随系统外观，配色必须同步换）
-        DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self?.updateTitle()
-                self?.rebuildMenu()
-            }
         }
     }
 
@@ -468,6 +455,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+        // 固定深色玻璃：菜单底色不再随壁纸/系统模式漂移，亮色文字永远有足够对比度
+        menu.appearance = NSAppearance(named: .darkAqua)
         statusItem.menu = menu
     }
 
