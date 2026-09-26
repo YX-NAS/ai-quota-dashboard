@@ -2,7 +2,7 @@
 
 [English](README.en.md) | [中文](README.md)
 
-![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -36,7 +36,7 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 
 ## 🚀 Up and running in 30 seconds
 
-Install [Node.js 22+](https://nodejs.org), then:
+Install [Node.js 22.13+](https://nodejs.org) (lowest version where `node:sqlite` needs no flag), then:
 
 ```bash
 git clone https://github.com/YX-NAS/ai-quota-dashboard.git
@@ -80,7 +80,7 @@ Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `s
 | Zhipu (GLM) Coding Plan, team edition (5h + weekly) | auto-discovered from ZCode OAuth / WorkBuddy / ZCode config, or set manually |
 | MiniMax Token Plan (5h + weekly) | auto-discovered from `~/.workbuddy-ai/models.json`, or set manually |
 
-A tool you don't use? Its card simply doesn't appear.
+A tool you don't use? Zero-usage cards collapse into a single "idle tools" row, and quota cards without credentials never render — no fake error cards, ever.
 
 ## 💰 How costs are calculated
 
@@ -151,7 +151,7 @@ Everything lives in `config/plans.json` (auto-generated; excluded by gitignore; 
 
 ```bash
 node test/run-tests.js                  # unit tests (pricing / aggregation / forecast)
-python3 test/verify-against-sources.py  # independently recompute today's numbers
+python3 test/verify-against-sources.py  # cross-check (needs real local data sources)
 ```
 
 ## ❓ FAQ
@@ -176,6 +176,18 @@ They reconcile row-for-row with the source databases. Run `python3 test/verify-a
 
 **Server / LAN deployment?**
 It's a single-machine tool by design (local data sources, binds to `127.0.0.1`). Run one copy per machine; bring your own authenticated reverse proxy for remote access.
+
+## 🗺️ Roadmap
+
+- **History persistence** (v1.4 headline): daily snapshots into a local SQLite so history survives source rotation
+- **Web UI i18n**: the interface is currently Chinese-only — PRs welcome
+- **Update check**: read-only GitHub Releases polling (opt-in)
+- **Configurable alert thresholds** across all surfaces
+- Signed & notarized macOS binaries for one-click Release downloads
+
+## 🪟 Windows note
+
+The Windows tray / desktop widget (`tray.ps1` / `widget.ps1`) are in **community-validation stage**: PS 5.1 syntax and encoding are verified statically, but large-scale real-machine regression is pending. Issues welcome.
 
 ## 🔒 Privacy & security
 

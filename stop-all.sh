@@ -9,7 +9,7 @@ echo "停止菜单栏应用..."
 pkill -x AIQuota 2>/dev/null && echo "  已停止" || echo "  未在运行"
 
 echo "停止看板服务..."
-# 直接匹配 node server/index.js 进程（连父 shell 一起结束，防止残留）
-pkill -f "node server/index.js" 2>/dev/null && echo "  已停止" || echo "  未在运行"
+# 匹配脚本路径（兼容不同 node 二进制的全路径命令行）
+pkill -f "server/index.js" 2>/dev/null && echo "  已停止" || echo "  未在运行"
 
 echo "全部停止。网页端将无法访问，MCP/CLI 查询不受影响（按需自启）。"

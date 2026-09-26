@@ -4,6 +4,22 @@
 import Cocoa
 import SwiftUI
 
+// 看板端口发现：① 环境变量 AI_QUOTA_PORT ② 仓库根 config/.port（bundlePath 上跳两级）③ 默认 7788，启动读一次后缓存
+func serverPort() -> Int {
+    enum PortCache { static var port = 0 }
+    if PortCache.port > 0 { return PortCache.port }
+    var port = 0
+    if let s = ProcessInfo.processInfo.environment["AI_QUOTA_PORT"] { port = Int(s) ?? 0 }
+    if port <= 0 {
+        let f = (Bundle.main.bundlePath as NSString).appendingPathComponent("../../config/.port")
+        if let s = try? String(contentsOfFile: (f as NSString).standardizingPath, encoding: .utf8) {
+            port = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+    }
+    PortCache.port = port > 0 ? port : 7788
+    return PortCache.port
+}
+
 // ---------- 数据 ----------
 struct UsageAgg {
     var requests = 0, inputTokens = 0, outputTokens = 0
@@ -69,7 +85,7 @@ func bjToday() -> String {
 func fetchWidgetData() -> WidgetData {
     var out = WidgetData()
     let sem = DispatchSemaphore(value: 0)
-    let u = URL(string: "http://127.0.0.1:7788/api/summary?days=8")!
+    let u = URL(string: "http://127.0.0.1:\(serverPort())/api/summary?days=8")!
     URLSession.shared.dataTask(with: u) { data, _, _ in
         defer { sem.signal() }
         guard let d = data,
@@ -412,13 +428,16 @@ final class WidgetAppDelegate: NSObject, NSApplicationDelegate {
         let collapsed = UserDefaults.standard.bool(forKey: "AIQuotaWidgetCollapsed")
         store.data.collapsed = collapsed
         let size = NSSize(width: Self.cardWidth, height: collapsed ? 120 : 280) // 初值，首帧布局后按上报高度校准
-        let screen = NSScreen.main!.visibleFrame
+        // 拿不到主屏时用默认 frame 兜底（不强解崩溃）
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         var origin = NSPoint(x: screen.maxX - size.width - 24, y: screen.maxY - size.height - 60)
         if let saved = UserDefaults.standard.string(forKey: positionKey) {
             let parts = saved.split(separator: ",").compactMap { Double($0) }
             if parts.count == 2 {
                 let p = NSPoint(x: parts[0], y: parts[1])
-                if p.x > 0 && p.y > 0 && p.x < screen.maxX && p.y < screen.maxY { origin = p }
+                // 位置校验：允许副屏负坐标，只要落在任一屏幕可见帧范围内即视为有效
+                let onAnyScreen = NSScreen.screens.contains { s in s.visibleFrame.contains(p) }
+                if onAnyScreen && abs(p.x) < 40000 && abs(p.y) < 40000 { origin = p }
             }
         }
         window = WidgetWindow(contentRect: NSRect(origin: origin, size: size),
@@ -475,7 +494,7 @@ final class WidgetAppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleCollapse() {
         store.toggleCollapse() // 高度由 $data 订阅自动校准
     }
-    @objc func openWeb() { if let u = URL(string: "http://localhost:7788") { NSWorkspace.shared.open(u) } }
+    @objc func openWeb() { if let u = URL(string: "http://localhost:\(serverPort())") { NSWorkspace.shared.open(u) } }
     @objc func refreshNow() { store.reload() }
     @objc func quit() { NSApp.terminate(nil) }
 }

@@ -1,10 +1,12 @@
+#!/usr/bin/env node
 'use strict';
 // AI 用量看板 MCP Server（stdio JSON-RPC 2.0，零依赖）
 // 供 ZCode / WorkBuddy / ChatGPT(Codex) / Claude Code 等任意 MCP 客户端使用
-// 也支持 CLI 模式：node mcp.js summary | tool:<名字> [days]
+// 也支持 CLI 模式：node mcp.js [summary|today|quota|models|tool:zcode:7]
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const { version: VERSION } = require(path.join(ROOT, 'package.json'));
 const plansStore = require(path.join(ROOT, 'server', 'lib', 'plans'));
 const { makePricer } = require(path.join(ROOT, 'server', 'lib', 'pricing'));
 const { aggregate, compareYesterday } = require(path.join(ROOT, 'server', 'lib', 'store'));
@@ -255,7 +257,7 @@ async function handleRpc(msg) {
       return ok({
         protocolVersion: (params && params.protocolVersion) || '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'ai-quota-dashboard', version: '1.0.0' },
+        serverInfo: { name: 'ai-quota-dashboard', version: VERSION },
       });
     }
     if (method === 'notifications/initialized' || method === 'notifications/cancelled') return null;
@@ -274,29 +276,35 @@ async function handleRpc(msg) {
 }
 
 function main() {
-  // CLI 模式：node mcp.js summary | today | quota | tool:zcode 7 | models
+  // CLI 模式：node mcp.js [summary|today|quota|models|tool:zcode:7] [days]
   const arg = process.argv[2];
   if (arg) {
+    const daysArg = Number(process.argv[3]); // summary/models 支持天数参数
     const map = { summary: 'ai_usage_summary', today: 'ai_usage_today', models: 'ai_usage_models', quota: 'ai_quota_windows' };
     let name = map[arg], a = {};
     if (!name && arg.startsWith('tool:')) {
       const [tool, days] = arg.slice(5).split(':');
       name = 'ai_usage_tool'; a = { tool, days: days ? Number(days) : 7 };
+    } else if (name && Number.isFinite(daysArg) && daysArg > 0) {
+      a = { days: daysArg };
     }
-    if (!name) { console.error('用法: node mcp.js [summary|today|quota|models|tool:<tool>:<days>]'); process.exit(1); }
+    if (!name) { console.error('用法: node mcp.js [summary|today|quota|models|tool:zcode:7] [days]'); process.exit(1); }
     callTool(name, a).then(r => { console.log(r.text); process.exit(0); }, e => { console.error(e.message); process.exit(1); });
     return;
   }
-  // stdio MCP 模式
+  // stdio MCP 模式（单行上限 1MB，超长输入直接丢弃，防内存被打爆）
+  const MAX_LINE = 1024 * 1024;
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => {
     buf += chunk;
+    if (buf.length > MAX_LINE && !buf.includes('\n')) { buf = ''; return; } // 无换行的超长输入：整段丢弃
     let idx;
     while ((idx = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 1);
       if (!line) continue;
+      if (line.length > MAX_LINE) continue; // 超长行忽略
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
       handleRpc(msg).then(out => {

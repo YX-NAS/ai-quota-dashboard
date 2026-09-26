@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?logo=node.js&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -34,13 +34,14 @@
 - 💸 **今天花了多少**：五张工具卡片，今日 / 本月 / 本周费用一目了然；订阅制工具自动折算「等价成本」，和真扣费的工具放在一起比
 - ⏳ **额度还剩多少**：ChatGPT、智谱 Coding Plan、MiniMax 的 5 小时窗口和周额度实时进度条，>60% 变黄、>85% 变红，带重置倒计时
 - 📈 **照这么用下去要花多少**：月底线性预估；30 天堆叠趋势图 + 每日明细（7/30/90 天切换）
+- 📤 **数据带得走**：每日明细 / 模型费用一键导出 CSV，整份快照导出 JSON——数据属于你
 - 🎯 **当日目标成本**：给每天定个 ¥200 的成本目标，横幅里看剩余预算、预计用完时间，菜单栏看百分比，用完/超支弹系统通知提醒（💸）
 - 🆚 **和昨天比**：今日同期 vs 昨日同期、昨日全天，一眼看出今天烧得快不快
 - 🔌 **MCP Server**：让 ZCode / Claude Code / Codex 直接问你「这周用了多少额度」
 
 ## 🚀 30 秒上手
 
-装好 [Node.js 22+](https://nodejs.org)，然后：
+装好 [Node.js 22.13+](https://nodejs.org)（`node:sqlite` 无需实验旗标的最低版本），然后：
 
 ```bash
 git clone https://github.com/YX-NAS/ai-quota-dashboard.git
@@ -84,7 +85,7 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 | 智谱 Coding Plan 团队版（5h + 周） | ZCode OAuth / WorkBuddy / ZCode 配置自动发现，或手动填 |
 | MiniMax Token Plan（5h + 周） | `~/.workbuddy-ai/models.json` 自动发现，或手动填 |
 
-没装的工具？对应卡片安静地不出现，不影响别人。
+没装的工具？零用量的卡片自动折叠成一行「未启用的工具」，查不到凭证的额度卡干脆不出现，绝不给你看假错误。
 
 ## 💰 钱是怎么算的（口径很重要）
 
@@ -106,7 +107,7 @@ claude mcp add --scope user ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp
 codex mcp add ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp.js
 ```
 
-提供 `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models` 四个工具，也能当 CLI 直接跑：
+提供 `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models` / `ai_quota_windows` 五个工具，也能当 CLI 直接跑：
 
 ```bash
 node mcp/mcp.js today        # 今日简报
@@ -181,10 +182,22 @@ node 首次监听端口时 Windows 会问一次「允许访问」，点允许即
 **能部署到服务器 / 局域网共享吗？**
 它是单机工具：数据在各自主机的用户目录里，服务只监听 `127.0.0.1`。多机就每台跑一份；真要远程看，自己加反向代理和鉴权。
 
+## 🗺️ Roadmap
+
+- **历史数据持久化**（v1.4 头牌）：每日聚合快照写入本地 SQLite，原始库滚动清理后历史不丢
+- **Web 端英文化**：界面 i18n（当前 README.en 读者点进来是中文 UI，欢迎 PR）
+- **版本更新检查**：只读轮询 GitHub Releases 提示新版本（可关）
+- **额度预警全端可配置**：阈值与通知通道进设置面板
+- macOS 二进制签名公证：让 Release 下载的 App 免除右键打开步骤（需要 Apple 开发者账号）
+
+## 🪟 Windows 端说明
+
+Windows 托盘 / 桌面卡片（`tray.ps1` / `widget.ps1`）为**社区验证阶段**：静态合规（PS 5.1 语法、UTF-8 BOM）已确认，但尚未经真机大规模回归，遇问题欢迎提 Issue。
+
 ## 🔒 隐私与安全
 
 - 所有采集**只读**，绝不写任何工具的数据库
-- API Key / OAuth Token 只存本机 `config/plans.json`，接口返回自动脱敏
+- API Key / OAuth Token 只存本机 `config/plans.json`（文件权限 600、原子写入），**任何接口都不会返回密钥明文**，服务只接受 localhost 访问
 - 服务只监听 `127.0.0.1`，外面访问不到
 - 不上传、不同步、不打点——你的用量数据只属于你
 

@@ -22,11 +22,28 @@ const cny = a => a ? a.costCny + a.equivalentCny : 0;
 
 let days = 30;
 let snap = null;
+let everLoaded = false;
+
+// 加载失败：顶部红色横幅 + 重试；首屏还没数据时先给加载骨架
+function showError() { document.getElementById('errBanner').hidden = false; }
+function hideError() { document.getElementById('errBanner').hidden = true; }
+function renderSkeleton() {
+  document.getElementById('kpis').innerHTML = '<div class="skeleton-line">数据构建中…</div>';
+  document.getElementById('cards').innerHTML = '<div class="skeleton-line">首次构建要扫描全部本地历史，可能需要几十秒…</div>';
+}
 
 async function load() {
-  const r = await fetch('/api/summary?days=' + days);
-  snap = await r.json();
-  render();
+  try {
+    const r = await fetch('/api/summary?days=' + days);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    snap = await r.json();
+    everLoaded = true;
+    hideError();
+    render();
+  } catch {
+    if (!everLoaded) renderSkeleton();
+    showError();
+  }
 }
 
 function render() {
@@ -49,11 +66,25 @@ function quotaBar(label, used, resetMs) {
   return `<div class="bar"><i class="${cls}" style="width:${Math.min(used, 100)}%"></i></div>
     <div class="quota-line"><span>${label} 已用 ${used}%</span><span class="mut">${used > 85 ? '⚠️ ' : ''}剩 ${Math.round((100 - used) * 10) / 10}%${reset}</span></div>`;
 }
+// 额度卡降级策略：未配置类原因（未找到/未配置/无凭证）且从未成功 → 整卡不渲染；
+// 曾成功过之后失败 → 显示失败态；其他失败原因（超时/接口异常）→ 也提示失败
+const quotaEverOk = {}; // key -> 曾成功过
+const QUOTA_UNCONFIGURED_RE = /未找到|未配置|无凭证/;
+function quotaCardMode(q, key) {
+  if (q && q.available) { quotaEverOk[key] = true; return 'ok'; }
+  if (quotaEverOk[key]) return 'error';
+  if (q && QUOTA_UNCONFIGURED_RE.test(String(q.reason || ''))) return 'skip';
+  return q ? 'error' : 'skip';
+}
+const quotaFailureHtml = reason =>
+  '<div class="quota-line"><span>实时额度获取失败</span><span class="mut">' + (reason || '') + '</span></div>';
+
 function renderQuotaCards() {
   const items = [];
-  const cgq = snap.chatgptQuota, mmq = snap.minimaxQuota;
 
-  if (cgq && cgq.available) {
+  const cgq = snap.chatgptQuota;
+  const cgMode = quotaCardMode(cgq, 'chatgpt');
+  if (cgMode === 'ok') {
     items.push({
       name: cgq.provider || 'ChatGPT Plus',
       note: 'Codex · GPT 系列',
@@ -61,11 +92,13 @@ function renderQuotaCards() {
           + quotaBar('周窗口', cgq.weekly && cgq.weekly.usedPercent, cgq.weekly && cgq.weekly.resetMsLeft),
       fresh: '实时 · ' + new Date(cgq.fetchedAt).toLocaleTimeString('zh-CN'),
     });
-  } else {
-    items.push({ name: 'ChatGPT Plus', note: 'Codex · GPT 系列', body: '<div class="quota-line"><span>实时额度获取失败</span><span class="mut">' + ((cgq && cgq.reason) || '') + '</span></div>', fresh: '' });
+  } else if (cgMode === 'error') {
+    items.push({ name: 'ChatGPT Plus', note: 'Codex · GPT 系列', body: quotaFailureHtml(cgq && cgq.reason), fresh: '' });
   }
 
-  if (mmq && mmq.available) {
+  const mmq = snap.minimaxQuota;
+  const mmMode = quotaCardMode(mmq, 'minimax');
+  if (mmMode === 'ok') {
     items.push({
       name: mmq.provider || 'MiniMax Token Plan',
       note: 'WorkBuddy / Codex 第三方',
@@ -73,22 +106,26 @@ function renderQuotaCards() {
           + quotaBar('周窗口', mmq.weekly && mmq.weekly.usedPercent, mmq.weekly && mmq.weekly.resetMsLeft),
       fresh: '实时 · ' + new Date(mmq.fetchedAt).toLocaleTimeString('zh-CN'),
     });
-  } else {
-    items.push({ name: 'MiniMax Token Plan MAX', note: 'WorkBuddy / Codex 第三方', body: '<div class="quota-line"><span>实时额度获取失败</span><span class="mut">' + ((mmq && mmq.reason) || '') + '</span></div>', fresh: '' });
+  } else if (mmMode === 'error') {
+    items.push({ name: 'MiniMax Token Plan MAX', note: 'WorkBuddy / Codex 第三方', body: quotaFailureHtml(mmq && mmq.reason), fresh: '' });
   }
 
   // 智谱 Coding Plan（团队版）：实时 5h/周额度，失败时降级为套餐等价进度
   const zq = snap.zhipuQuota;
   const zp = snap.plans.plans.zcode || {};
   let zhipuBody = '', zhipuName = '智谱 Coding Plan 团队版', zhipuNote = 'ZCode / Claude Code / WorkBuddy', zhipuFresh = '';
-  if (zq && zq.available) {
+  const zpMode = quotaCardMode(zq, 'zhipu');
+  if (zpMode === 'ok') {
     zhipuBody = quotaBar('5 小时窗口', zq.fiveHour && zq.fiveHour.usedPercent, zq.fiveHour && zq.fiveHour.resetMsLeft)
         + quotaBar('周窗口', zq.weekly && zq.weekly.usedPercent, zq.weekly && zq.weekly.resetMsLeft);
     zhipuFresh = '实时 · ' + new Date(zq.fetchedAt).toLocaleTimeString('zh-CN')
         + (zq.team ? ' · ' + zq.team.organizationName + ' / ' + zq.team.projectName : '');
-  } else {
-    zhipuBody = '<div class="quota-line"><span>实时额度获取失败</span><span class="mut">' + ((zq && zq.reason) || '') + '</span></div>';
+  } else if (zpMode === 'error') {
+    zhipuBody = quotaFailureHtml(zq && zq.reason);
     zhipuFresh = '降级为等价成本口径';
+  } else {
+    renderQuotaItems(items); // 智谱卡被跳过：已收好的卡直接渲染出口
+    return;
   }
   if (zp.cnyPerMonth) {
     let used = 0;
@@ -105,7 +142,10 @@ function renderQuotaCards() {
     zhipuFresh += ' · 套餐 ¥' + zp.cnyPerMonth + '/月';
   }
   items.push({ name: zhipuName, note: zhipuNote, body: zhipuBody, fresh: zhipuFresh });
+  renderQuotaItems(items);
+}
 
+function renderQuotaItems(items) {
   document.getElementById('quotaCards').innerHTML = items.map(it => `
     <div class="card" data-key="${it.name}">
       <h3>${it.name} <span class="tag">实时</span></h3>
@@ -242,9 +282,14 @@ function forecast(toolKey) {
   return el ? spent / el * dim : 0;
 }
 
+// 数据源行数：codex / claudeDesktop 都来自 cc-switch，共用一个计数
+function rowStatOf(toolKey) {
+  return snap.rowStats[(toolKey === 'codex' || toolKey === 'claudeDesktop') ? 'ccswitch' : toolKey] || 0;
+}
+
 function renderCards() {
   const fx = snap.plans.usdCnyRate || 7.2; // 仅用于 USD 原值展示
-  const cardsHtml = TOOLS.map(t => {
+  const buildCard = t => {
     const p = snap.plans.plans[t.key] || {};
     const today = toolDay(todayKey(), t.key) || { requests: 0, inputTokens: 0, outputTokens: 0, costCny: 0, costUsd: 0, equivalentCny: 0 };
     let month = { requests: 0, inputTokens: 0, outputTokens: 0, costCny: 0, costUsd: 0, equivalentCny: 0, subUsd: 0, payUsd: 0, subRequests: 0, payRequests: 0 };
@@ -309,7 +354,7 @@ function renderCards() {
     // 昨日同期（昨日此刻之前）该工具的请求与费用
     const yTool = snap.cmp && snap.cmp.yesterdaySameTime.tools && snap.cmp.yesterdaySameTime.tools[t.key];
     const yToolPart = yTool && yTool.requests
-      ? ` <span class="mut" style="font-size:11px">· 昨同 ${fmt(yTool.requests)} 次 / ${fmtCny(yTool.cny)}</span>` : '';
+      ? ` <span class="mut" style="font-size:11px;display:inline-block">· 昨同 ${fmt(yTool.requests)} 次 / ${fmtCny(yTool.cny)}</span>` : '';
 
     return `<div class="card" data-key="${t.key}">
       <h3>${t.name} ${t.sub ? '<span class="tag sub-pay">套餐</span>' : '<span class="tag">按量</span>'}</h3>
@@ -322,10 +367,26 @@ function renderCards() {
         <div><span class="k">本月预估</span><span>${fmtCny(fc)} <span class="mut">（线性外推）</span></span></div>
       </div>
       ${quotaHtml}
-      <div class="fresh">数据源 ${snap.rowStats[t.key === 'claudeDesktop' || t.key === 'codex' ? 'ccswitch' : t.key] ?? 0} 条${snap.collectorErrors[t.key === 'claudeDesktop' || t.key === 'codex' ? 'ccswitch' : t.key] ? ' · <span class="err">' + snap.collectorErrors['ccswitch'] + '</span>' : ''}</div>
+      <div class="fresh">数据源 ${rowStatOf(t.key)} 条${snap.collectorErrors[(t.key === 'claudeDesktop' || t.key === 'codex') ? 'ccswitch' : t.key] ? ' · <span class="err">' + snap.collectorErrors[(t.key === 'claudeDesktop' || t.key === 'codex') ? 'ccswitch' : t.key] + '</span>' : ''}</div>
     </div>`;
-  }).join('');
-  document.getElementById('cards').innerHTML = cardsHtml;
+  };
+  // 未启用（rowStats=0）的工具卡折叠成一行，可展开；展开态记忆在 localStorage
+  const idleToolsKey = 'aqd:idleToolsExpanded';
+  let idleExpanded = false;
+  try { idleExpanded = localStorage.getItem(idleToolsKey) === '1'; } catch { /* localStorage 不可用 */ }
+  const idleTools = TOOLS.filter(t => !rowStatOf(t.key));
+  let idleHtml = '';
+  if (idleTools.length) {
+    idleHtml = `<div class="card idle-toggle" id="idleToggle">另有 ${idleTools.length} 个未启用的工具 <span class="arr">${idleExpanded ? '▾' : '▸'}</span></div>`
+      + (idleExpanded ? idleTools.map(buildCard).join('') : '');
+  }
+  document.getElementById('cards').innerHTML =
+    TOOLS.filter(t => rowStatOf(t.key)).map(buildCard).join('') + idleHtml;
+  const tg = document.getElementById('idleToggle');
+  if (tg) tg.addEventListener('click', () => {
+    try { localStorage.setItem(idleToolsKey, idleExpanded ? '0' : '1'); } catch { /* 忽略 */ }
+    renderCards();
+  });
   applyCardOrder('cards');
 }
 
@@ -488,6 +549,7 @@ const QUOTA_KEY_FIELDS = [
   ['chatgpt', 'accessToken', 'ChatGPT · Access Token（一般留空，自动读 codex 登录；手动填的过期需自行更新）'],
 ];
 document.getElementById('settingsBtn').onclick = async () => {
+  document.getElementById('settingsErr').hidden = true; // 打开时清掉上次错误
   const r = await fetch('/api/plans'); const p = await r.json();
   const qk = p.quotaKeys || {};
   document.getElementById('settingsBody').innerHTML =
@@ -511,6 +573,8 @@ document.getElementById('settingsBtn').onclick = async () => {
 document.getElementById('settingsCancel').onclick = () => dlg.close();
 document.getElementById('settingsX').onclick = () => dlg.close();
 document.getElementById('settingsSave').onclick = async () => {
+  const errBox = document.getElementById('settingsErr');
+  errBox.hidden = true;
   const plans = {};
   document.querySelectorAll('[data-plan]').forEach(el => {
     plans[el.dataset.plan] = { cnyPerMonth: el.value === '' ? null : Number(el.value) };
@@ -526,13 +590,34 @@ document.getElementById('settingsSave').onclick = async () => {
     const m = el.dataset.price, f = el.dataset.pf;
     if (el.value !== '') (priceOverrides[m] = priceOverrides[m] || {})[f] = Number(el.value);
   });
-  await fetch('/api/plans', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ usdCnyRate: Number(document.getElementById('sFx').value), dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 }, plans, quotaKeys, priceOverrides }),
-  });
-  dlg.close();
-  load();
+  try {
+    const r = await fetch('/api/plans', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usdCnyRate: Number(document.getElementById('sFx').value), dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 }, plans, quotaKeys, priceOverrides }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || 'HTTP ' + r.status);
+    }
+    dlg.close();   // 成功才关弹窗
+    toast('已保存');
+    load();
+  } catch (e) {
+    // 失败留在弹窗，就地显示错误
+    errBox.textContent = '保存失败：' + e.message;
+    errBox.hidden = false;
+  }
 };
+
+// 轻提示：底部浮出，2.2s 后淡出
+function toast(msg) {
+  let el = document.querySelector('.toast');
+  if (!el) { el = document.createElement('div'); el.className = 'toast'; document.body.appendChild(el); }
+  el.textContent = msg;
+  requestAnimationFrame(() => el.classList.add('show'));
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
 
 document.getElementById('daySeg').addEventListener('click', e => {
   if (e.target.dataset.d) {
@@ -541,6 +626,60 @@ document.getElementById('daySeg').addEventListener('click', e => {
     load();
   }
 });
+
+// ---------- 数据导出（CSV 带 \uFEFF BOM，保 Excel 打开中文不乱码；data URI 下载） ----------
+function download(name, content, mime) {
+  const a = document.createElement('a');
+  a.href = 'data:' + mime + ';charset=utf-8,' + encodeURIComponent('\uFEFF' + content);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+const csvCell = v => {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+const csvRow = cells => cells.map(csvCell).join(',');
+const ymd = () => todayKey().replace(/-/g, '');
+
+function exportDetailCsv() {
+  const head = ['日期'];
+  for (const t of TOOLS) head.push(t.name + ' 次数', t.name + ' tokens', t.name + ' 费用(¥)');
+  const lines = [csvRow(head)];
+  for (const d of [...snap.agg.dailyKeys].reverse()) {
+    const row = [d];
+    for (const t of TOOLS) {
+      const a = toolDay(d, t.key);
+      row.push(a ? a.requests : '', a ? a.inputTokens + a.outputTokens : '', a ? cny(a).toFixed(2) : '');
+    }
+    lines.push(csvRow(row));
+  }
+  download(`ai-quota-export-${ymd()}.csv`, lines.join('\r\n'), 'text/csv');
+}
+
+function exportModelsCsv() {
+  const models = snap.agg.models || {};
+  const lines = [csvRow(['工具', '模型', '请求', '输入 tokens', '输出 tokens', '缓存命中 tokens', '费用(¥，含等价)', '实际费用($)'])];
+  for (const t of TOOLS) {
+    const ms = models[t.key];
+    if (!ms) continue;
+    for (const [m, v] of Object.entries(ms)) {
+      lines.push(csvRow([t.name, m, v.requests, v.inputTokens, v.outputTokens, v.cacheReadTokens,
+        cny(v).toFixed(2), v.costUsd != null ? v.costUsd.toFixed(2) : '']));
+    }
+  }
+  download(`ai-quota-export-${ymd()}-models.csv`, lines.join('\r\n'), 'text/csv');
+}
+
+function exportJson() {
+  download(`ai-quota-export-${ymd()}.json`, JSON.stringify(snap, null, 2), 'application/json');
+}
+
+document.getElementById('exportDetailCsv').addEventListener('click', () => { if (snap) exportDetailCsv(); });
+document.getElementById('exportModelsCsv').addEventListener('click', () => { if (snap) exportModelsCsv(); });
+document.getElementById('exportJson').addEventListener('click', () => { if (snap) exportJson(); });
+document.getElementById('retryBtn').addEventListener('click', () => load());
 
 // ---------- 卡片拖拽排序（Pointer Events 实现 + localStorage 持久化） ----------
 // 不用 HTML5 DnD：合成事件无法触发原生 dragstart，且 Pointer 方案支持触控笔、动效完全可控

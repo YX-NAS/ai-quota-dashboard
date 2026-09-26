@@ -1,6 +1,7 @@
 # 用户本地配置（含实时额度 API Key / Token，切勿提交）
 config/plans.json
 config/.zhipu-team-context.json
+config/.port
 
 # macOS
 .DS_Store

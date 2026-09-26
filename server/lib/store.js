@@ -7,6 +7,16 @@ const bjDate = ts => {
 };
 const bjMonth = ts => bjDate(ts).slice(0, 7);
 
+// 历史扫描下界：默认回看 365 天（日聚合 / 本月统计 / 90 天明细都在此范围内），
+// 全历史的 models 表接受此截断；需要更久可设环境变量 AI_QUOTA_MAX_DAYS 覆盖
+function maxDays() {
+  const n = Number(process.env.AI_QUOTA_MAX_DAYS);
+  return Number.isFinite(n) && n > 0 ? n : 365;
+}
+function historyCutoffMs(now = Date.now()) {
+  return now - maxDays() * 86400e3;
+}
+
 function aggregate(rows, pricer) {
   const daily = {};    // date -> { [tool]: agg, __total: agg }
   const monthly = {};  // month -> { [tool]: agg, __total: agg }
@@ -134,4 +144,4 @@ function compareYesterday(rows, pricer, now = Date.now()) {
   return { yesterdaySameTime: bucket(yStart, ySameEnd), yesterdayFull: bucket(yStart, yDayEnd) };
 }
 
-module.exports = { aggregate, monthlyForecast, compareYesterday, bjDate, bjMonth };
+module.exports = { aggregate, monthlyForecast, compareYesterday, bjDate, bjMonth, maxDays, historyCutoffMs };

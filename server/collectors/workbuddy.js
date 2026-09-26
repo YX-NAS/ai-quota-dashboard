@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { historyCutoffMs } = require('../lib/store');
 
 const ROOT = path.join(os.homedir(), '.workbuddy-ai', 'projects');
 
@@ -18,16 +19,27 @@ function listJsonls(dir, out) {
   }
 }
 
-function collect() {
-  const files = [];
-  listJsonls(ROOT, files);
-  if (!files.length) return { rows: [], error: null, source: ROOT };
+// cached_tokens 可能在对象或数组里（OpenAI 兼容格式差异）；数组元素缺字段时按 0 计，不清零整个和
+function cachedFromDetails(details) {
+  if (Array.isArray(details)) return details.reduce((s, x) => s + ((x && x.cached_tokens) || 0), 0);
+  return (details && details.cached_tokens) || 0;
+}
 
+function collect(root = ROOT) {
+  const files = [];
+  listJsonls(root, files);
+  if (!files.length) return { rows: [], error: null, source: root };
+
+  // 行追加模型下安全：mtime 早于下界的文件不可能有新行，整个文件跳过
+  const cutoff = historyCutoffMs();
   const seen = new Set();
   const rows = [];
   let parseErrors = 0;
 
   for (const f of files) {
+    try {
+      if (fs.statSync(f).mtimeMs < cutoff) continue;
+    } catch { continue; }
     let content;
     try { content = fs.readFileSync(f, 'utf8'); } catch { continue; }
     for (const line of content.split('\n')) {
@@ -41,20 +53,19 @@ function collect() {
       const mid = pd.messageId || (d.id || '');
       const dk = path.basename(f) + '|' + mid + '|' + model;
       if (seen.has(dk)) continue;
+      const ts = Number(d.timestamp);
+      if (!Number.isFinite(ts) || ts <= 0) continue;   // 时间非法的脏行跳过
+      if (!Number.isFinite(Number(u.inputTokens)) || !Number.isFinite(Number(u.outputTokens))) continue;
       seen.add(dk);
 
       const raw = pd.rawUsage || {};
-      // cached_tokens 可能藏在对象或数组里（OpenAI 兼容格式差异）
-      const fromDetails = Array.isArray(u.inputTokensDetails)
-        ? u.inputTokensDetails.reduce((s, x) => s + (x && x.cached_tokens) || 0, 0)
-        : (u.inputTokensDetails && u.inputTokensDetails.cached_tokens) || 0;
       const cacheHit = raw.prompt_cache_hit_tokens != null
         ? raw.prompt_cache_hit_tokens
-        : fromDetails;
+        : cachedFromDetails(u.inputTokensDetails);
 
       rows.push({
         tool: 'workbuddy',
-        ts: Number(d.timestamp),
+        ts,
         model: model.replace(/^custom-local:/, ''),
         inputTokens: u.inputTokens || 0,
         outputTokens: u.outputTokens || 0,
@@ -66,7 +77,7 @@ function collect() {
       });
     }
   }
-  return { rows, error: parseErrors ? `${parseErrors} parse errors` : null, source: ROOT };
+  return { rows, error: parseErrors ? `${parseErrors} parse errors` : null, source: root };
 }
 
-module.exports = { collect };
+module.exports = { collect, cachedFromDetails };

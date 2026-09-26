@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { historyCutoffMs } = require('../lib/store');
 
 const ROOT = path.join(os.homedir(), '.claude', 'projects');
 
@@ -17,16 +18,21 @@ function listJsonls(dir, out) {
   }
 }
 
-function collect() {
+function collect(root = ROOT) {
   const files = [];
-  listJsonls(ROOT, files);
-  if (!files.length) return { rows: [], error: null, source: ROOT };
+  listJsonls(root, files);
+  if (!files.length) return { rows: [], error: null, source: root };
 
+  // 行追加模型下安全：mtime 早于下界的文件不可能有新行，整个文件跳过
+  const cutoff = historyCutoffMs();
   const seen = new Set();
   const rows = [];
   let parseErrors = 0;
 
   for (const f of files) {
+    try {
+      if (fs.statSync(f).mtimeMs < cutoff) continue;
+    } catch { continue; }
     let content;
     try { content = fs.readFileSync(f, 'utf8'); } catch { continue; }
     for (const line of content.split('\n')) {
@@ -61,7 +67,7 @@ function collect() {
       });
     }
   }
-  return { rows, error: parseErrors ? `${parseErrors} parse errors` : null, source: ROOT };
+  return { rows, error: parseErrors ? `${parseErrors} parse errors` : null, source: root };
 }
 
 module.exports = { collect };

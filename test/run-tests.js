@@ -2,6 +2,14 @@
 // 测试：store 聚合 + pricing 计价 + forecast
 // 运行：node test/run-tests.js
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+// 配置目录重定向到临时目录：单测不读写真实 config/plans.json（必须在 require server 模块前设置）
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aqd-test-'));
+process.env.AI_QUOTA_CONFIG_DIR = TMP_DIR;
+
 const { aggregate, monthlyForecast } = require('../server/lib/store');
 const { makePricer } = require('../server/lib/pricing');
 
@@ -146,6 +154,11 @@ t('maskSecret：长 key 掐头去尾，短 key 全遮', () => {
   assert.equal(maskSecret('short'), '••••');
   assert.equal(maskSecret(''), '');
 });
+t('maskSecret：JWT 不保留头部特征，掩码里 grep 不到 eyJ', () => {
+  const m = maskSecret('eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.abc.def');
+  assert.ok(!m.includes('eyJ'), `got ${m}`);
+  assert.ok(m.endsWith('c.def'.slice(-4)));
+});
 t('maskQuotaKeys：机密脱敏，org/project 保持原值', () => {
   const cfg = { quotaKeys: { zhipu: { token: 'abcd1234efgh5678', organizationId: 'org-X', projectId: 'proj-Y' }, minimax: { apiKey: 'ey-abcdef123456' } } };
   const m = maskQuotaKeys(cfg);
@@ -184,5 +197,203 @@ t('applyQuotaKeysUpdate：配置原样传递时结构完整', () => {
   assert.equal(next.zhipu.token, '');
 });
 
+console.log('== workbuddy：cached_tokens 求和 + NaN 防护 + mtime 跳过 ==');
+const wb = require('../server/collectors/workbuddy');
+t('cachedFromDetails：数组元素缺 cached_tokens 按 0 计，不清零整个和', () => {
+  assert.equal(wb.cachedFromDetails([{ cached_tokens: 5 }, {}, { cached_tokens: 7 }]), 12, '旧写法会得到 7');
+  assert.equal(wb.cachedFromDetails([{ cached_tokens: 5 }, null, undefined]), 5);
+  assert.equal(wb.cachedFromDetails({ cached_tokens: 9 }), 9);
+  assert.equal(wb.cachedFromDetails(undefined), 0);
+});
+(function wbFixture() {
+  // 构造临时 jsonl：正常行 / 时间非法行 / token 非法行 / mtime 过旧文件
+  const wbDir = path.join(TMP_DIR, 'wb-projects', 'p1');
+  fs.mkdirSync(wbDir, { recursive: true });
+  const mk = (mid, usage, timestamp) => JSON.stringify({
+    timestamp,
+    id: mid,
+    providerData: { model: 'glm-5.3-flash', messageId: mid, usage, rawUsage: {} },
+  });
+  const usage = extra => Object.assign({ inputTokens: 100, outputTokens: 50, inputTokensDetails: [{ cached_tokens: 5 }, {}, { cached_tokens: 7 }] }, extra);
+  const lines = [
+    mk('m1', usage(), Date.now()),                          // 正常 → 保留，缓存命中 = 12
+    mk('m2', usage(), 'not-a-timestamp'),                   // 时间非法 → 跳过
+    mk('m3', usage({ inputTokens: 'oops' }), Date.now()),   // token 非法 → 跳过
+    mk('m4', usage(), undefined),                           // 缺时间戳 → 跳过
+  ];
+  fs.writeFileSync(path.join(wbDir, 'fresh.jsonl'), lines.join('\n') + '\n');
+  const oldFile = path.join(wbDir, 'ancient.jsonl');
+  fs.writeFileSync(oldFile, mk('old', usage(), Date.now()) + '\n');
+  const old = new Date(Date.now() - 400 * 86400e3); // 400 天前，早于默认 365 天下界
+  fs.utimesSync(oldFile, old, old);
+})();
+t('workbuddy collect：正常行保留（缓存求和=12），时间/token 非法的脏行跳过', () => {
+  const freshFile = path.join(TMP_DIR, 'wb-projects', 'p1', 'fresh.jsonl');
+  const r = wb.collect(path.join(TMP_DIR, 'wb-projects'));
+  assert.equal(r.rows.length, 1, `应只剩 1 条，got ${r.rows.length}`);
+  assert.equal(r.rows[0].dedupKey, 'fresh.jsonl|m1|glm-5.3-flash');
+  assert.equal(r.rows[0].cacheReadTokens, 12);
+  assert.ok(fs.statSync(freshFile).mtimeMs > 0);
+});
+t('workbuddy collect：mtime 早于历史下界的 jsonl 整个文件跳过', () => {
+  const r = wb.collect(path.join(TMP_DIR, 'wb-projects'));
+  assert.ok(!r.rows.some(x => x.dedupKey.includes('|old|')), '旧文件不应产出任何行');
+});
+
+console.log('== claudecode：mtime 跳过 ==');
+const clc = require('../server/collectors/claudecode');
+(function claudeFixture() {
+  const dir = path.join(TMP_DIR, 'claude-projects', 'p1');
+  fs.mkdirSync(dir, { recursive: true });
+  const line = JSON.stringify({ timestamp: new Date().toISOString(), message: { id: 'a1', model: 'glm-5.3', usage: { input_tokens: 10, output_tokens: 5 } } });
+  fs.writeFileSync(path.join(dir, 'fresh.jsonl'), line + '\n');
+  const oldFile = path.join(dir, 'ancient.jsonl');
+  fs.writeFileSync(oldFile, line + '\n');
+  const old = new Date(Date.now() - 400 * 86400e3);
+  fs.utimesSync(oldFile, old, old);
+})();
+t('claudecode collect：新鲜文件可解析，过旧文件整体跳过', () => {
+  const r = clc.collect(path.join(TMP_DIR, 'claude-projects'));
+  assert.equal(r.rows.length, 1, `got ${r.rows.length}`);
+  assert.equal(r.rows[0].model, 'glm-5.3');
+});
+
+console.log('== sqlite 采集器：SQL 下界 + NaN 防护 ==');
+const { DatabaseSync } = require('node:sqlite');
+const zcode = require('../server/collectors/zcode');
+const ccswitch = require('../server/collectors/ccswitch');
+(function sqliteFixtures() {
+  const now = Date.now();
+  const zdb = new DatabaseSync(path.join(TMP_DIR, 'zcode.sqlite'));
+  zdb.exec(`CREATE TABLE model_usage (started_at, model_id, input_tokens, output_tokens,
+    reasoning_tokens, cache_creation_input_tokens, cache_read_input_tokens, status)`);
+  const zi = zdb.prepare(`INSERT INTO model_usage VALUES (?, 'glm-5.3', 100, 10, 0, 0, 2, ?)`);
+  zi.run(now, 'completed');                 // 正常 → 保留
+  zi.run('not-a-timestamp', 'completed');   // 时间非法（文本）→ NaN 防护跳过
+  zi.run(now - 400 * 86400e3, 'completed'); // 早于 SQL 下界 → 跳过
+  zi.run(now + 1, 'error');                 // 非 completed → 跳过
+  zdb.close();
+
+  const cdb = new DatabaseSync(path.join(TMP_DIR, 'cc-switch.sqlite'));
+  cdb.exec(`CREATE TABLE proxy_request_logs (app_type, model, input_tokens, output_tokens,
+    cache_read_tokens, cache_creation_tokens, total_cost_usd, created_at)`);
+  const ci = cdb.prepare(`INSERT INTO proxy_request_logs VALUES (?, 'gpt-5.6', 100, 10, 2, 0, ?, ?)`);
+  const nowSec = Math.floor(now / 1000);
+  ci.run('codex', 1.5, nowSec);           // 正常 codex → 保留
+  ci.run('codex', null, nowSec - 400 * 86400); // 早于下界（秒）→ 跳过
+  ci.run('codex', 'abc', nowSec);         // 成本非法 → 跳过
+  cdb.prepare(`INSERT INTO proxy_request_logs VALUES ('codex', 'gpt-5.6', 100, 10, 2, 0, NULL, ?)`).run(nowSec); // NULL 成本 → 保留（costUsd=null）
+  cdb.prepare(`INSERT INTO proxy_request_logs VALUES ('claude-desktop', 'glm-5.3', 100, 10, 2, 0, NULL, ?)`).run(nowSec); // 拆分 claudeDesktop
+  cdb.prepare(`INSERT INTO proxy_request_logs VALUES ('codex', 'gpt-5.6', 100, 10, 2, 0, 1, 'not-a-ts')`).run(); // 时间非法 → 跳过
+  cdb.close();
+})();
+t('zcode collect：只留下界内且 completed、时间合法的行', () => {
+  const r = zcode.collect(path.join(TMP_DIR, 'zcode.sqlite'));
+  assert.equal(r.rows.length, 1, `got ${r.rows.length}`);
+  assert.equal(r.rows[0].cacheReadTokens, 2);
+});
+t('ccswitch collect：时间/成本非法行跳过，app_type 拆分与 NULL 成本保留', () => {
+  const r = ccswitch.collect(path.join(TMP_DIR, 'cc-switch.sqlite'));
+  assert.equal(r.rows.length, 3, `got ${r.rows.length}`);
+  const codex = r.rows.find(x => x.tool === 'codex' && x.costUsd != null);
+  assert.equal(codex.costUsd, 1.5);
+  assert.ok(r.rows.some(x => x.tool === 'claudeDesktop'));
+  assert.ok(r.rows.some(x => x.tool === 'codex' && x.costUsd === null));
+});
+
+console.log('== POST 校验过滤（applyPlansUpdate） ==');
+const { applyPlansUpdate } = require('../server/lib/plans');
+t('非法值剔除该字段保留原值；0 目标=关闭；汇率必须有限正数', () => {
+  const cur = {
+    usdCnyRate: 7.2,
+    plans: { zcode: { label: 'ZCode', plan: null, cnyPerDay: null, cnyPerMonth: 300 } },
+    priceOverrides: {},
+    dailyGoal: { cny: 200 },
+    quotaKeys: { zhipu: { token: '', organizationId: '', projectId: '' }, minimax: { apiKey: '' }, chatgpt: { accessToken: '' } },
+  };
+  const next = applyPlansUpdate(cur, {
+    usdCnyRate: -1,                                            // 非法 → 保留 7.2
+    plans: { zcode: { cnyPerMonth: -5, cnyPerDay: 30 } },      // -5 非法保留 300；30 合法
+    priceOverrides: { 'glm-5.3': { in: 8, out: -1, cacheRead: 'abc' }, ghost: { in: NaN } }, // 只留 in:8
+    dailyGoal: { cny: 0 },                                     // 0 = 关闭目标，允许
+    quotaKeys: { zhipu: { token: '', organizationId: 'org-1', projectId: '' }, minimax: { apiKey: '' }, chatgpt: { accessToken: '' } },
+  });
+  assert.equal(next.usdCnyRate, 7.2);
+  assert.equal(next.plans.zcode.cnyPerMonth, 300, '负数月额度应保留原值');
+  assert.equal(next.plans.zcode.cnyPerDay, 30);
+  assert.deepEqual(next.priceOverrides, { 'glm-5.3': { in: 8 } }, '非法单价字段应剔除，全空模型不出现');
+  assert.equal(next.dailyGoal.cny, 0);
+  assert.equal(next.quotaKeys.zhipu.organizationId, 'org-1');
+  assert.equal(cur.plans.zcode.cnyPerMonth, 300, '入参不被修改');
+});
+t('合法更新生效：汇率 7.5、目标 100、月额度清空为 null', () => {
+  const cur = { usdCnyRate: 7.2, plans: { zcode: { cnyPerDay: null, cnyPerMonth: 300 } }, priceOverrides: {}, dailyGoal: { cny: 200 } };
+  const next = applyPlansUpdate(cur, {
+    usdCnyRate: 7.5,
+    plans: { zcode: { cnyPerMonth: null } },
+    dailyGoal: { cny: 100 },
+  });
+  assert.equal(next.usdCnyRate, 7.5);
+  assert.equal(next.plans.zcode.cnyPerMonth, null);
+  assert.equal(next.dailyGoal.cny, 100);
+});
+
+console.log('== /api/summary 脱敏口径 ==');
+// maskQuotaKeys 已在上方「quotaKeys 脱敏/合并」段引入
+t('maskQuotaKeys 后序列化不含 JWT 明文，非机密字段原样保留', () => {
+  const cfg = {
+    usdCnyRate: 7.2,
+    dailyGoal: { cny: 200 },
+    plans: { zcode: { label: 'ZCode', plan: 'Max', cnyPerMonth: 300 } },
+    quotaKeys: { chatgpt: { accessToken: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig' }, zhipu: { token: '88b9bae46e074c44a5af286187a1f450.TvRgrz8RRNRNGXlN', organizationId: 'org-X', projectId: 'proj-Y' } },
+  };
+  const s = JSON.stringify(maskQuotaKeys(cfg));
+  assert.ok(!s.includes('eyJhbGciOi'), 'accessToken 不得以明文出现');
+  assert.ok(!s.includes('88b9bae46e074c44a5af286187a1f450'), 'token 不得以明文出现');
+  assert.ok(s.includes('••••….sig'), '应保留掩码形态（JWT 无头部特征）');
+  assert.ok(s.includes('"cnyPerMonth":300') && s.includes('"dailyGoal"') && s.includes('org-X'), 'plans/dailyGoal/plain 字段必须保留');
+});
+
+console.log('== plans.json 原子写 / 缓存失效 / 坏文件恢复 ==');
+const plansStore = require('../server/lib/plans');
+t('save 原子写：0600 权限、无 .tmp 残留、内容完整', () => {
+  plansStore.save({ usdCnyRate: 7.2, dailyGoal: { cny: 50 }, plans: {}, priceOverrides: {}, quotaKeys: {} });
+  assert.ok(fs.existsSync(plansStore.PLANS_FILE));
+  assert.ok(!fs.existsSync(plansStore.PLANS_FILE + '.tmp'), '临时文件应已被 rename');
+  const mode = fs.statSync(plansStore.PLANS_FILE).mode & 0o777;
+  assert.equal(mode, 0o600, `got ${mode.toString(8)}`);
+  assert.ok(fs.readFileSync(plansStore.PLANS_FILE, 'utf8').includes('"cny": 50'));
+});
+t('load 缓存失效：外部改文件（mtime 变化）后重读，不回旧缓存', () => {
+  const external = JSON.stringify({ usdCnyRate: 8.8, dailyGoal: { cny: 50 }, plans: {}, priceOverrides: {}, quotaKeys: {} });
+  fs.writeFileSync(plansStore.PLANS_FILE, external);
+  assert.equal(plansStore.load().usdCnyRate, 8.8, '应感知外部修改');
+});
+t('load 遇 JSON 损坏：备份为 .bak 再落模板，不直接吞掉', () => {
+  fs.writeFileSync(plansStore.PLANS_FILE, '{broken json!!');
+  const cfg = plansStore.load();
+  assert.equal(cfg.usdCnyRate, 7.2, '损坏后应落模板');
+  assert.equal(fs.readFileSync(plansStore.PLANS_FILE + '.bak', 'utf8'), '{broken json!!');
+  assert.ok(fs.existsSync(plansStore.PLANS_FILE), '模板应已写回');
+});
+
+console.log('== HTTP Host 白名单 + 端口文件 ==');
+const { hostAllowed, writePortFile } = require('../server/index.js');
+t('hostAllowed：仅 localhost/127.0.0.1/[::1] 带任意端口，其余 403 口径', () => {
+  assert.equal(hostAllowed('localhost:7788'), true);
+  assert.equal(hostAllowed('localhost'), true);
+  assert.equal(hostAllowed('127.0.0.1:7795'), true);
+  assert.equal(hostAllowed('[::1]:7795'), true);
+  assert.equal(hostAllowed('evil.com'), false);
+  assert.equal(hostAllowed('localhost.evil.com:80'), false);
+  assert.equal(hostAllowed(''), false);
+  assert.equal(hostAllowed(undefined), false);
+});
+t('writePortFile：listen 成功后把实际端口写入 config/.port', () => {
+  writePortFile(7795);
+  assert.equal(fs.readFileSync(path.join(TMP_DIR, '.port'), 'utf8'), '7795');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
+try { fs.rmSync(TMP_DIR, { recursive: true, force: true }); } catch { /* 清理失败不影响结果 */ }
 process.exit(fail ? 1 : 0);

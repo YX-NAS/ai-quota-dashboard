@@ -1,8 +1,24 @@
 // AI 用量菜单栏插件 · 单文件 Swift
-// 依赖看板服务 http://localhost:7788（node server/index.js）
+// 依赖看板服务（node server/index.js），端口见 serverPort()：环境变量 AI_QUOTA_PORT > 仓库根 config/.port > 默认 7788
 // 编译: swiftc -O -o AIQuota.app/Contents/MacOS/AIQuota menubar.swift
 import Cocoa
 import Foundation
+
+// 看板端口发现：① 环境变量 AI_QUOTA_PORT ② 仓库根 config/.port（bundlePath 上跳两级）③ 默认 7788，启动读一次后缓存
+func serverPort() -> Int {
+    enum PortCache { static var port = 0 }
+    if PortCache.port > 0 { return PortCache.port }
+    var port = 0
+    if let s = ProcessInfo.processInfo.environment["AI_QUOTA_PORT"] { port = Int(s) ?? 0 }
+    if port <= 0 {
+        let f = (Bundle.main.bundlePath as NSString).appendingPathComponent("../../config/.port")
+        if let s = try? String(contentsOfFile: (f as NSString).standardizingPath, encoding: .utf8) {
+            port = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        }
+    }
+    PortCache.port = port > 0 ? port : 7788
+    return PortCache.port
+}
 
 // ---------- 数据模型 ----------
 // daily[date] 是混合体（数值字段 + 工具对象），Codable 处理麻烦，直接用 JSONSerialization
@@ -24,59 +40,68 @@ struct UsageAgg {
     }
 }
 
-func fetchDayUsage(_ date: String) -> [String: UsageAgg]? {
-    let sem = DispatchSemaphore(value: 0)
-    var result: [String: UsageAgg]?
-    // days=8 覆盖整个 ISO 周（今天 + 最多前 7 天），一次请求同时取今日明细与本周合计
-    let urls = [URL(string: "http://127.0.0.1:7788/api/summary?days=8")!,
-                URL(string: "http://localhost:7788/api/summary?days=8")!]
-    for u in urls {
-        URLSession.shared.dataTask(with: u) { data, _, err in
-            defer { sem.signal() }
-            if let err = err { lastFetchError = "网络: \(err.localizedDescription)"; return }
-            guard let d = data,
-                  let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-                  let agg = obj["agg"] as? [String: Any],
-                  let daily = agg["daily"] as? [String: Any],
-                  let dayRaw = daily[date] as? [String: Any] else {
-                lastFetchError = "解析失败(\(data?.count ?? 0)B)"
-                return
-            }
-            var tools: [String: UsageAgg] = [:]
-            for (k, v) in dayRaw {
-                if let vd = v as? [String: Any] { tools[k] = UsageAgg(vd) }
-            }
-            result = tools
-            // 本周合计（北京 ISO 周一起）
-            let monday = bjWeekStart()
-            var wk = 0.0
-            for (k, v) in daily {
-                guard k >= monday, let vd = v as? [String: Any], let tot = vd["__total"] as? [String: Any] else { continue }
-                let a = UsageAgg(tot)
-                wk += a.costCny + a.equivalentCny
-            }
-            weekCny = wk
-            // 昨日同期
-            if let cmp = obj["cmp"] as? [String: Any],
-               let ys = cmp["yesterdaySameTime"] as? [String: Any],
-               let tot = ys["total"] as? [String: Any] {
-                ySameCny = tot["cny"] as? Double ?? 0
-            }
-            if let plans = obj["plans"] as? [String: Any],
-               let goal = plans["dailyGoal"] as? [String: Any],
-               let g = goal["cny"] as? Double, g > 0 {
-                todayGoalCny = g
-            }
-            lastFetchError = nil
-        }.resume()
-        _ = sem.wait(timeout: .now() + 5)
-        if result != nil { break }
-    }
-    return result
+// 一次当日刷新的完整结果（后台线程解析，主线程统一落库到全局变量）
+struct DayFetchResult {
+    var tools: [String: UsageAgg] = [:]
+    var weekCny = 0.0
+    var ySameCny = 0.0
+    var todayGoalCny = 0.0
 }
 
-var weekCny = 0.0 // 本周（周一起）等价成本合计
-var ySameCny = 0.0 // 昨日同期（昨日此刻之前）等价成本
+// 解析 /api/summary：当日各工具明细 + 本周合计 + 昨日同期 + 当日目标（纯函数，可后台线程调用）
+func parseSummary(_ d: Data, date: String) -> DayFetchResult? {
+    guard let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+          let agg = obj["agg"] as? [String: Any],
+          let daily = agg["daily"] as? [String: Any],
+          let dayRaw = daily[date] as? [String: Any] else { return nil }
+    var r = DayFetchResult()
+    for (k, v) in dayRaw {
+        if let vd = v as? [String: Any] { r.tools[k] = UsageAgg(vd) }
+    }
+    // 本周合计（北京 ISO 周一起）
+    let monday = bjWeekStart()
+    for (k, v) in daily {
+        guard k >= monday, let vd = v as? [String: Any], let tot = vd["__total"] as? [String: Any] else { continue }
+        let a = UsageAgg(tot)
+        r.weekCny += a.costCny + a.equivalentCny
+    }
+    // 昨日同期
+    if let cmp = obj["cmp"] as? [String: Any],
+       let ys = cmp["yesterdaySameTime"] as? [String: Any],
+       let tot = ys["total"] as? [String: Any] {
+        r.ySameCny = tot["cny"] as? Double ?? 0
+    }
+    if let plans = obj["plans"] as? [String: Any],
+       let goal = plans["dailyGoal"] as? [String: Any],
+       let g = goal["cny"] as? Double, g > 0 {
+        r.todayGoalCny = g
+    }
+    return r
+}
+
+// 异步拉当日明细（completion 在主线程回调；result 为 nil 表示两个地址都失败，errMsg 为最后一条错误）
+// days=8 覆盖整个 ISO 周（今天 + 最多前 7 天），一次请求同时取今日明细与本周合计
+func fetchDayUsage(_ date: String, completion: @escaping (DayFetchResult?, String?) -> Void) {
+    // 127.0.0.1 失败回退 localhost，沿用原双地址策略
+    let urls = [URL(string: "http://127.0.0.1:\(serverPort())/api/summary?days=8")!,
+                URL(string: "http://localhost:\(serverPort())/api/summary?days=8")!]
+    func attempt(_ i: Int, lastErr: String?) {
+        guard i < urls.count else { DispatchQueue.main.async { completion(nil, lastErr) }; return }
+        let req = URLRequest(url: urls[i], timeoutInterval: 10)
+        URLSession.shared.dataTask(with: req) { data, _, err in
+            if err == nil, let d = data, let r = parseSummary(d, date: date) {
+                DispatchQueue.main.async { completion(r, nil) }
+                return
+            }
+            let msg = err.map { "网络: \($0.localizedDescription)" } ?? "解析失败(\(data?.count ?? 0)B)"
+            attempt(i + 1, lastErr: msg)
+        }.resume()
+    }
+    attempt(0, lastErr: nil)
+}
+
+var weekCny = 0.0 // 本周（周一起）等价成本合计（只在主线程读写）
+var ySameCny = 0.0 // 昨日同期（昨日此刻之前）等价成本（只在主线程读写）
 func bjWeekStart() -> String {
     var cal = Calendar(identifier: .iso8601)
     cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
@@ -122,10 +147,19 @@ func notifyGoalMilestone(pct: Double, spent: Double) {
     UserDefaults.standard.set(stage, forKey: "goalNotifyStage")
 }
 func notifyOSX(_ title: String, _ body: String) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    p.arguments = ["-e", "display notification \"\(body.replacingOccurrences(of: "\"", with: "'"))\" with title \"\(title.replacingOccurrences(of: "\"", with: "'"))\" sound name \"Glass\""]
-    try? p.run()
+    // osascript 参数转义：先处理反斜杠再处理引号，避免拼接出越权转义
+    func esc(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+    // 后台队列跑 osascript 并 waitUntilExit 回收子进程（防僵尸积累），不阻塞主线程
+    DispatchQueue.global().async {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", "display notification \"\(esc(body))\" with title \"\(esc(title))\" sound name \"Glass\""]
+        try? p.run()
+        p.waitUntilExit()
+    }
 }
 
 // 套餐实时额度（5h/周窗口）
@@ -139,33 +173,30 @@ struct PlanQuota {
     var weekly = QuotaWindow()
 }
 
-func fetchQuotas() -> [PlanQuota]? {
-    let sem = DispatchSemaphore(value: 0)
-    var result: [PlanQuota]?
-    let u = URL(string: "http://127.0.0.1:7788/api/summary?days=1")!
+// 异步拉套餐实时额度（completion 在主线程回调；失败/为空返回空数组，语义同原 fetchQuotas() ?? []）
+func fetchQuotas(completion: @escaping ([PlanQuota]) -> Void) {
+    let u = URL(string: "http://127.0.0.1:\(serverPort())/api/summary?days=1")!
     URLSession.shared.dataTask(with: u) { data, _, _ in
-        defer { sem.signal() }
-        guard let d = data,
-              let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return }
         var out: [PlanQuota] = []
-        for key in ["chatgptQuota", "minimaxQuota", "zhipuQuota"] {
-            guard let q = obj[key] as? [String: Any], (q["available"] as? Bool) == true else { continue }
-            var pq = PlanQuota()
-            pq.provider = (q["provider"] as? String) ?? key
-            if let fh = q["fiveHour"] as? [String: Any] {
-                pq.fiveHour = QuotaWindow(usedPercent: fh["usedPercent"] as? Int,
-                                          resetMsLeft: fh["resetMsLeft"] as? Double)
+        if let d = data,
+           let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            for key in ["chatgptQuota", "minimaxQuota", "zhipuQuota"] {
+                guard let q = obj[key] as? [String: Any], (q["available"] as? Bool) == true else { continue }
+                var pq = PlanQuota()
+                pq.provider = (q["provider"] as? String) ?? key
+                if let fh = q["fiveHour"] as? [String: Any] {
+                    pq.fiveHour = QuotaWindow(usedPercent: fh["usedPercent"] as? Int,
+                                              resetMsLeft: fh["resetMsLeft"] as? Double)
+                }
+                if let wk = q["weekly"] as? [String: Any] {
+                    pq.weekly = QuotaWindow(usedPercent: wk["usedPercent"] as? Int,
+                                            resetMsLeft: wk["resetMsLeft"] as? Double)
+                }
+                out.append(pq)
             }
-            if let wk = q["weekly"] as? [String: Any] {
-                pq.weekly = QuotaWindow(usedPercent: wk["usedPercent"] as? Int,
-                                        resetMsLeft: wk["resetMsLeft"] as? Double)
-            }
-            out.append(pq)
         }
-        if !out.isEmpty { result = out }
+        DispatchQueue.main.async { completion(out) }
     }.resume()
-    _ = sem.wait(timeout: .now() + 5)
-    return result
 }
 
 func fmtReset(_ ms: Double?) -> String {
@@ -265,6 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var lastOK = false
     var planQuotas: [PlanQuota] = []
     var goalPct = 0.0
+    var refreshing = false // 刷新进行中：状态栏显示 ⚡ … 占位
+    var fetchGen = 0 // 刷新代际：新刷新开始 +1，迟到回调代际不匹配即丢弃
 
     let toolNames: [String: String] = [
         "codex": "ChatGPT·Codex", "claudeDesktop": "Claude Desktop",
@@ -288,40 +321,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh(_ sender: Any?) {
-        let today = bjToday()
-        guard let dayObj = fetchDayUsage(today) else {
-            lastOK = false
-            toolRows = []
-            todayTotal = (0, 0, 0)
-            updateTitle()
-            return
-        }
-        lastOK = true
-
-        var rows: [(String, Int, Int, Double)] = []
-        var totReq = 0, totTok = 0
-        var totCny = 0.0
-        var pay = 0.0
-        for (key, name) in toolNames.sorted(by: { $0.value < $1.value }) {
-            guard let a = dayObj[key] else { continue }
-            let tok = a.inputTokens + a.outputTokens
-            let cny = a.costCny + a.equivalentCny
-            rows.append((name, a.requests, tok, cny))
-            totReq += a.requests
-            totTok += tok
-            totCny += cny
-            pay += a.payUsd
-        }
-        toolRows = rows
-        todayTotal = (totReq, totTok, totCny)
-        realPay = pay
-        planQuotas = fetchQuotas() ?? []
-        if todayGoalCny > 0 {
-            goalPct = min(todayTotal.cny / todayGoalCny * 100, 999)
-            notifyGoalMilestone(pct: goalPct, spent: todayTotal.cny)
-        }
+        // 代际 token：刷新期间状态栏显示 ⚡ …，超时迟到的旧请求结果不再写状态
+        fetchGen += 1
+        let gen = fetchGen
+        refreshing = true
         updateTitle()
-        rebuildMenu()
+        fetchDayUsage(bjToday()) { [weak self] result, errMsg in
+            guard let self = self, gen == self.fetchGen else { return }
+            self.refreshing = false
+            guard let result = result else {
+                self.lastOK = false
+                lastFetchError = errMsg
+                self.toolRows = []
+                self.todayTotal = (0, 0, 0)
+                self.updateTitle()
+                return
+            }
+            self.lastOK = true
+            lastFetchError = nil
+            // 全局可变量只在主线程写（本闭包已在主队列）
+            weekCny = result.weekCny
+            ySameCny = result.ySameCny
+            if result.todayGoalCny > 0 { todayGoalCny = result.todayGoalCny }
+            var rows: [(String, Int, Int, Double)] = []
+            var totReq = 0, totTok = 0
+            var totCny = 0.0
+            var pay = 0.0
+            for (key, name) in self.toolNames.sorted(by: { $0.value < $1.value }) {
+                guard let a = result.tools[key] else { continue }
+                let tok = a.inputTokens + a.outputTokens
+                let cny = a.costCny + a.equivalentCny
+                rows.append((name, a.requests, tok, cny))
+                totReq += a.requests
+                totTok += tok
+                totCny += cny
+                pay += a.payUsd
+            }
+            self.toolRows = rows
+            self.todayTotal = (totReq, totTok, totCny)
+            self.realPay = pay
+            fetchQuotas { quotas in
+                guard gen == self.fetchGen else { return }
+                self.planQuotas = quotas
+                if todayGoalCny > 0 {
+                    self.goalPct = min(self.todayTotal.cny / todayGoalCny * 100, 999)
+                    notifyGoalMilestone(pct: self.goalPct, spent: self.todayTotal.cny)
+                }
+                self.updateTitle()
+                self.rebuildMenu()
+            }
+        }
     }
 
     func updateTitle() {
@@ -330,7 +379,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
         // 高亮多巴胺色 + 深色投影：亮/暗菜单栏条上都清晰（不依赖外观检测）
         let text = NSMutableAttributedString()
-        if !lastOK {
+        if refreshing {
+            text.append(barSegment("⚡ …", .systemGray, font: font))
+        } else if !lastOK {
             text.append(barSegment("⚡︎ --", .systemGray, font: font))
         } else {
             text.append(barSegment("⚡", barGold, font: font))
@@ -345,7 +396,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         btn.attributedTitle = text
-        try? "title=\(btn.title) lastOK=\(lastOK) rows=\(toolRows.count) quotas=\(planQuotas.count) goal=\(todayGoalCny)>\(Int(goalPct))% err=\(lastFetchError ?? "-")".write(toFile: "/tmp/aiquota_debug.log", atomically: true, encoding: .utf8)
     }
 
     func rebuildMenu() {
@@ -466,7 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func doRefresh() { refresh(nil) }
 
     @objc func openWeb() {
-        if let url = URL(string: "http://localhost:7788") { NSWorkspace.shared.open(url) }
+        if let url = URL(string: "http://localhost:\(serverPort())") { NSWorkspace.shared.open(url) }
     }
     @objc func openWidget() {
         // 优先找与菜单栏 app 同仓库的 desktop/AIQuotaWidget.app（bundlePath 在 menubar/ 下，需上跳两级到仓库根）

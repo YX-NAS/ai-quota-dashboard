@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 'use strict';
 // AI 工具额度看板 · 本地服务（零 npm 依赖）
 const http = require('node:http');
@@ -19,7 +20,8 @@ const WEB_DIR = path.join(__dirname, '..', 'web');
 const PORT = Number(process.env.PORT || 7788);
 const REFRESH_MS = 60_000;
 
-let cache = { builtAt: 0, payload: null, building: false };
+let cache = { builtAt: 0, payload: null };
+let building = null; // in-flight 构建Promise：并发请求 await 同一次构建，避免首建竞态 500
 
 async function buildSnapshot() {
   const plans = plansStore.load();
@@ -44,7 +46,8 @@ async function buildSnapshot() {
 
   return {
     builtAt: Date.now(),
-    plans,
+    // 快照对外脱敏：quotaKeys 机密字段（accessToken 等）只出掩码形态，其余配置原样
+    plans: plansStore.maskQuotaKeys(plans),
     agg,
     cmp,
     chatgptQuota: chatgptQuotaData,
@@ -58,16 +61,20 @@ async function buildSnapshot() {
 async function ensureFresh(force = false) {
   const age = Date.now() - cache.builtAt;
   if (!force && cache.payload && age < REFRESH_MS) return cache.payload;
-  if (cache.building) return cache.payload; // 已在重建，先回旧值
-  cache.building = true;
-  try {
-    const p = await buildSnapshot();
-    cache.payload = p;
-    cache.builtAt = p.builtAt;
-    return p;
-  } finally {
-    cache.building = false;
-  }
+  if (building) return building; // 已在构建：并发调用等同一个 Promise
+  building = buildSnapshot()
+    .then(p => { cache.payload = p; cache.builtAt = p.builtAt; return p; })
+    .finally(() => { building = null; });
+  return building;
+}
+
+// Host 白名单：只信任本机主机名（带任意端口），防 DNS rebinding / 局域网直访
+// 注：URL hostname 对 IPv6 保留方括号形态 [::1]
+const ALLOWED_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+function hostAllowed(host) {
+  if (!host) return false;
+  try { return ALLOWED_HOSTS.has(new URL('http://' + host).hostname); }
+  catch { return false; }
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -80,14 +87,25 @@ function sendJson(res, code, obj) {
 
 function readBody(req, limit = 256 * 1024) {
   return new Promise((resolve, reject) => {
-    let buf = '';
-    req.on('data', c => { buf += c; if (buf.length > limit) { reject(new Error('too large')); req.destroy(); } });
-    req.on('end', () => resolve(buf));
-    req.on('error', reject);
+    let buf = '', over = false;
+    req.on('data', c => {
+      if (over) return;
+      buf += c;
+      if (buf.length > limit) {
+        over = true;
+        const e = new Error('request body too large'); e.statusCode = 413;
+        reject(e);
+        req.resume(); // 丢弃剩余数据，保持连接可回写 413（不直接断连）
+      }
+    });
+    req.on('end', () => { if (!over) resolve(buf); });
+    req.on('error', e => { if (!over) reject(e); });
   });
 }
 
 const server = http.createServer(async (req, res) => {
+  // 非 本机 Host 一律 403
+  if (!hostAllowed(req.headers.host)) { res.writeHead(403); return res.end(); }
   const url = new URL(req.url, 'http://localhost');
   try {
     if (url.pathname === '/api/summary') {
@@ -108,19 +126,14 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, out);
     }
     if (url.pathname === '/api/plans' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}');
-      const next = plansStore.load();
-      if (body.usdCnyRate != null) next.usdCnyRate = Number(body.usdCnyRate) || next.usdCnyRate;
-      if (body.plans) for (const [k, v] of Object.entries(body.plans)) {
-        if (!next.plans[k]) continue;
-        for (const f of ['cnyPerDay', 'cnyPerMonth']) {
-          if (f in v) next.plans[k][f] = v[f] === null || v[f] === '' ? null : Number(v[f]);
-        }
-      }
-      if (body.priceOverrides) next.priceOverrides = body.priceOverrides;
-      if (body.quotaKeys) next.quotaKeys = plansStore.applyQuotaKeysUpdate(next, body.quotaKeys);
-      if (body.dailyGoal && Number(body.dailyGoal.cny) > 0) next.dailyGoal = { cny: Number(body.dailyGoal.cny) };
-      plansStore.save(next);
+      // CSRF 加固：写接口只接受 JSON 表单提交
+      const ct = String(req.headers['content-type'] || '');
+      if (!ct.includes('application/json')) return sendJson(res, 415, { error: 'Content-Type 必须为 application/json' });
+      let raw, body;
+      try { raw = await readBody(req); } catch { return sendJson(res, 413, { error: '请求体过大' }); }
+      try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { error: 'JSON 解析失败' }); }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { error: 'JSON 必须为对象' });
+      plansStore.save(plansStore.applyPlansUpdate(plansStore.load(), body));
       await ensureFresh(true); // 立即按新配置重算
       return sendJson(res, 200, { ok: true });
     }
@@ -139,6 +152,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// 端口发现契约：listen 成功后把实际端口写给菜单栏 / 桌面组件读取（config/.port，纯文本端口号）
+function writePortFile(port) {
+  try {
+    fs.mkdirSync(plansStore.CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(path.join(plansStore.CONFIG_DIR, '.port'), String(port));
+  } catch (e) {
+    console.error('[ai-quota] 写入端口文件失败:', e.message);
+  }
+}
+
 async function main() {
   let port = PORT;
   for (; port < PORT + 20; port++) {
@@ -153,6 +176,7 @@ async function main() {
       if (e.code !== 'EADDRINUSE') throw e;
     }
   }
+  writePortFile(port);
   console.log(`[ai-quota] 看板已启动 → http://localhost:${port}`);
   console.log(`[ai-quota] 每 ${REFRESH_MS / 1000}s 自动重扫本地数据；首次构建中…`);
   ensureFresh(true).then(snap => {
@@ -161,4 +185,6 @@ async function main() {
   setInterval(() => ensureFresh().catch(() => {}), REFRESH_MS);
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { buildSnapshot, ensureFresh, hostAllowed, writePortFile };
