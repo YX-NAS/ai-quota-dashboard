@@ -103,7 +103,7 @@ function readBody(req, limit = 256 * 1024) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   // 非 本机 Host 一律 403
   if (!hostAllowed(req.headers.host)) { res.writeHead(403); return res.end(); }
   const url = new URL(req.url, 'http://localhost');
@@ -150,7 +150,9 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     sendJson(res, 500, { error: e.message });
   }
-});
+};
+
+const server = http.createServer(requestHandler);
 
 // 端口发现契约：listen 成功后把实际端口写给菜单栏 / 桌面组件读取（config/.port，纯文本端口号）
 function writePortFile(port) {
@@ -177,6 +179,17 @@ async function main() {
     }
   }
   writePortFile(port);
+  // IPv6 回环尽力绑定：macOS 上只绑 127.0.0.1 时，把 localhost 解析成 ::1 的浏览器会
+  // ERR_CONNECTION_REFUSED；单独绑 ::1 又不管 IPv4（实测），所以两个回环各挂一份同一 handler。
+  // 失败（如系统禁用 IPv6）不影响主服务。
+  try {
+    const v6 = http.createServer(requestHandler);
+    await new Promise((resolve, reject) => {
+      v6.once('error', reject);
+      v6.listen(port, '::1', () => resolve());
+    });
+    console.log('[ai-quota] IPv6 回环已监听（localhost 双栈可达）');
+  } catch { /* 无 IPv6 时忽略 */ }
   console.log(`[ai-quota] 看板已启动 → http://localhost:${port}`);
   console.log(`[ai-quota] 每 ${REFRESH_MS / 1000}s 自动重扫本地数据；首次构建中…`);
   ensureFresh(true).then(snap => {
