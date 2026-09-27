@@ -48,6 +48,7 @@ async function load() {
 
 function render() {
   document.getElementById('updatedAt').textContent = '更新于 ' + new Date(snap.builtAt).toLocaleTimeString('zh-CN');
+  renderOnboard();
   renderGoalBanner();
   renderKpis();
   renderCards();
@@ -73,7 +74,7 @@ const QUOTA_UNCONFIGURED_RE = /未找到|未配置|无凭证/;
 function quotaCardMode(q, key) {
   if (q && q.available) { quotaEverOk[key] = true; return 'ok'; }
   if (quotaEverOk[key]) return 'error';
-  if (q && QUOTA_UNCONFIGURED_RE.test(String(q.reason || ''))) return 'skip';
+  if (q && (q.notConfigured || QUOTA_UNCONFIGURED_RE.test(String(q.reason || '')))) return 'skip';
   return q ? 'error' : 'skip';
 }
 const quotaFailureHtml = reason =>
@@ -146,6 +147,8 @@ function renderQuotaCards() {
 }
 
 function renderQuotaItems(items) {
+  // 全部额度卡都隐藏时，连区块标题一起收起，避免留一截空标题
+  document.getElementById('quotaCards').closest('section').style.display = items.length ? '' : 'none';
   document.getElementById('quotaCards').innerHTML = items.map(it => `
     <div class="card" data-key="${it.name}">
       <h3>${it.name} <span class="tag">实时</span></h3>
@@ -452,6 +455,11 @@ function renderModelCosts() {
 
 function renderChart() {
   const daysList = snap.agg.dailyKeys.slice(-30);
+  const hasAnyData = daysList.some(d => { const t = snap.agg.daily[d]; return t && t.__total && cny(t.__total) > 0; });
+  if (!hasAnyData) {
+    document.getElementById('chartBox').innerHTML = '<div class="mut" style="padding:28px 0;text-align:center">暂无成本数据 —— 开始使用 AI 工具后，这里会出现每日成本趋势</div>';
+    return;
+  }
   const W = 1100, H = 220, P = { l: 50, r: 12, t: 12, b: 24 };
   const rawMax = Math.max(1, ...daysList.map(d => {
     const t = snap.agg.daily[d];
@@ -680,6 +688,26 @@ document.getElementById('exportDetailCsv').addEventListener('click', () => { if 
 document.getElementById('exportModelsCsv').addEventListener('click', () => { if (snap) exportModelsCsv(); });
 document.getElementById('exportJson').addEventListener('click', () => { if (snap) exportJson(); });
 document.getElementById('retryBtn').addEventListener('click', () => load());
+
+// ---------- 新用户引导横幅：所有采集器都没有数据时显示一次 ----------
+function renderOnboard() {
+  const box = document.getElementById('onboard');
+  if (!box) return;
+  const total = Object.values(snap.rowStats || {}).reduce((x, y) => x + y, 0);
+  if (total > 0 || localStorage.getItem('aqd:onboardDismissed')) { box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div class="glass" style="padding:14px 18px;margin:12px 0;border-radius:16px">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <b style="background:var(--grad-cool);-webkit-background-clip:text;background-clip:text;color:transparent">👋 第一次使用</b>
+        <span class="mut" style="font-size:13px;flex:1">看板读取的是本机工具的使用记录：ZCode · Claude Code · Claude Desktop · ChatGPT·Codex(cc-switch) · WorkBuddy。装好并用上任意一个，数据 1 分钟内自动出现；额度卡需要对应套餐的凭证（设置里可配）。</span>
+        <button id="onboardOk" class="seg" style="margin:0">知道了</button>
+      </div>
+    </div>`;
+  document.getElementById('onboardOk').onclick = () => {
+    localStorage.setItem('aqd:onboardDismissed', '1');
+    box.innerHTML = '';
+  };
+}
 
 // ---------- 卡片拖拽排序（Pointer Events 实现 + localStorage 持久化） ----------
 // 不用 HTML5 DnD：合成事件无法触发原生 dragstart，且 Pointer 方案支持触控笔、动效完全可控

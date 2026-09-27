@@ -48,7 +48,11 @@ async function collect() {
   if (!accessToken) {
     let auth;
     try { auth = JSON.parse(fs.readFileSync(AUTH, 'utf8')); }
-    catch (e) { return { available: false, reason: 'auth.json unreadable: ' + e.message, source: AUTH }; }
+    catch (e) {
+      // 新机器没有 ~/.codex/auth.json 属「未配置」而非故障：结构化标记让前端隐藏该卡而非显示英文报错
+      const notConfigured = e.code === 'ENOENT';
+      return { available: false, notConfigured, reason: notConfigured ? '未找到 ChatGPT 登录（~/.codex/auth.json，设置面板可手动配置）' : 'auth.json unreadable: ' + e.message, source: AUTH };
+    }
     const tokens = auth.tokens || auth;
     accessToken = tokens.access_token;
     accountId = tokens.account_id || auth.account_id;

@@ -49,7 +49,7 @@ async function collect() {
   let configured = null;
   try { configured = String(((plansStore.load().quotaKeys || {}).minimax || {}).apiKey || '').trim() || null; } catch { /* 忽略 */ }
   const key = configured || getMiniMaxKey();
-  if (!key) return { available: false, reason: '无 MiniMax key（设置面板可配置，或 models.json 自动发现）', source: configured ? 'plans.json quotaKeys.minimax' : MODELS_FILE };
+  if (!key) return { available: false, notConfigured: true, reason: '未找到 MiniMax key（设置面板可配置，或 models.json 自动发现）', source: configured ? 'plans.json quotaKeys.minimax' : MODELS_FILE };
 
   const r = await fetchRemains(key);
   if (!r.ok) return { available: false, reason: r.reason, source: 'minimaxi.com coding_plan/remains' };

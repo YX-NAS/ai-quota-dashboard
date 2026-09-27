@@ -1,6 +1,20 @@
 #!/usr/bin/env node
 'use strict';
 // AI 工具额度看板 · 本地服务（零 npm 依赖）
+
+// Node 版本门槛：node:sqlite 需 22.13+（更早版本要 --experimental-sqlite 旗标）。
+// 必须在 require 采集器之前拦截，否则新用户只会看到晦涩的 "Cannot find module 'node:sqlite'"。
+(() => {
+  const m = /^v?(\d+)\.(\d+)/.exec(process.versions.node || '');
+  const maj = m ? Number(m[1]) : 0, min = m ? Number(m[2]) : 0;
+  if (maj < 22 || (maj === 22 && min < 13)) {
+    console.error(`[ai-quota] 需要 Node.js ≥ 22.13（当前 ${process.versions.node || '未知'}）。`);
+    console.error('[ai-quota] 内置 node:sqlite 在更早版本需要实验旗标，无法直接运行。');
+    console.error('[ai-quota] 安装新版后重试：https://nodejs.org');
+    process.exit(1);
+  }
+})();
+
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -177,6 +191,10 @@ async function main() {
     } catch (e) {
       if (e.code !== 'EADDRINUSE') throw e;
     }
+  }
+  if (!server.listening) {
+    console.error(`[ai-quota] ${PORT}~${PORT + 19} 端口全部被占用，无法启动。可用环境变量 PORT=xxxx 指定其他起始端口。`);
+    process.exit(1);
   }
   writePortFile(port);
   // IPv6 回环尽力绑定：macOS 上只绑 127.0.0.1 时，把 localhost 解析成 ::1 的浏览器会

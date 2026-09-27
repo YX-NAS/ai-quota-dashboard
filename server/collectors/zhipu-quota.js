@@ -148,7 +148,7 @@ function parseQuotaLimits(limits, now = Date.now()) {
 async function collect() {
   const creds = getCredentials();
   if (!creds.configured.token && !creds.oauth && !creds.apiKeys.length) {
-    return { available: false, reason: '未找到智谱凭证（设置面板可手动配置，或 ZCode / WorkBuddy 自动发现）', source: CREDS_FILE };
+    return { available: false, notConfigured: true, reason: '未找到智谱凭证（设置面板可手动配置，或 ZCode / WorkBuddy 自动发现）', source: CREDS_FILE };
   }
 
   // 1) 团队 org/project：手动配置优先 → 内存缓存 → 落盘缓存 → OAuth 发现
@@ -173,7 +173,7 @@ async function collect() {
     }
   }
   if (!ctxs.length) {
-    return { available: false, reason: creds.oauth ? '未发现团队编程套餐项目' : 'OAuth 不可用且无缓存，无法定位团队项目（设置面板可手动填 org/project）', source: HOST };
+    return { available: false, notConfigured: true, reason: creds.oauth ? '未发现团队编程套餐项目' : 'OAuth 不可用且无缓存，无法定位团队项目（设置面板可手动填 org/project）', source: HOST };
   }
 
   // 2) 逐个项目查额度，取有 limits 的；配置 token 排最前
