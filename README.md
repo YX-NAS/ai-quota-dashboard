@@ -126,6 +126,13 @@ cd menubar && swiftc -O -o AIQuota.app/Contents/MacOS/AIQuota menubar.swift
 cd desktop && swiftc -O -o AIQuotaWidget.app/Contents/MacOS/AIQuotaWidget desktop-widget.swift
 ```
 
+应用图标（可选）：仓库自带生成器，网页 favicon（`web/favicon.png`）已内置，app 图标一条命令生成：
+
+```bash
+swift scripts/gen-icon.swift /tmp/aiquota-icon && iconutil -c icns /tmp/aiquota-icon/AppIcon.iconset -o /tmp/aiquota-icon/AppIcon.icns
+# 把 AppIcon.icns 放进各 app 的 Contents/Resources/，并在 Info.plist 加 <key>CFBundleIconFile</key><string>AppIcon</string>
+```
+
 ## 🪟 Windows 托盘 + 桌面卡片（可选）
 
 `start-all.cmd` 会自动带起，无需编译（系统自带 PowerShell + WinForms），也可单独启动：

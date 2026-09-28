@@ -121,6 +121,13 @@ cd menubar && swiftc -O -o AIQuota.app/Contents/MacOS/AIQuota menubar.swift
 cd desktop && swiftc -O -o AIQuotaWidget.app/Contents/MacOS/AIQuotaWidget desktop-widget.swift
 ```
 
+App icon (optional): the generator ships in-repo; the web favicon (`web/favicon.png`) is included already, and the app icon is one command away:
+
+```bash
+swift scripts/gen-icon.swift /tmp/aiquota-icon && iconutil -c icns /tmp/aiquota-icon/AppIcon.iconset -o /tmp/aiquota-icon/AppIcon.icns
+# Drop AppIcon.icns into each app's Contents/Resources/ and add <key>CFBundleIconFile</key><string>AppIcon</string> to Info.plist
+```
+
 ## 🪟 Windows tray + desktop widget (optional)
 
 `start-all.cmd` brings both up automatically — no build step (stock PowerShell + WinForms). To start them individually:
