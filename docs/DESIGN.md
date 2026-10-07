@@ -1,6 +1,6 @@
 # AI 工具额度看板 · 设计文档
 
-> 版本 v1.0 · 2026-09 · 项目名：ai-quota-dashboard
+> 版本 v1.5 · 2026-10 · 项目名：ai-quota-dashboard
 
 ## 1. 目标
 
@@ -35,7 +35,10 @@ ai-quota-dashboard/
 │   ├── lib/
 │   │   ├── store.js        # 聚合存储：requests[]、日/月汇总、缓存
 │   │   ├── pricing.js      # 单价表 + 成本计算
-│   │   └── plans.js        # 用户额度配置读写 (config/plans.json)
+│   │   ├── plans.js        # 用户额度配置读写 (config/plans.json)
+│   │   ├── history.js      # 历史归档库 history.sqlite（写入 + 补缺合并）
+│   │   ├── alerts.js       # 额度预警引擎（评估 / 冷却 / webhook 推送）
+│   │   └── report.js       # 周报 / 月报生成（纯函数 → Markdown）
 │   └── collectors/
 │       ├── zcode.js        # ~/.zcode SQLite 只读采集
 │       ├── ccswitch.js     # ~/.cc-switch/cc-switch.db 采集
@@ -94,6 +97,7 @@ ai-quota-dashboard/
 |---|---|
 | `GET /` | 看板页面 |
 | `GET /api/summary?days=30` | 全量聚合 JSON |
+| `GET /api/report?type=week\|month&offset=N` | 周报/月报（title + markdown + data；offset 上限 week 520 / month 120，非法值钳回本期） |
 | `GET /api/refresh` | 强制重扫 |
 | `GET /api/plans` / `POST /api/plans` | 读取/保存额度配置（含 `quotaKeys`：三家实时额度的手动 key；GET 对机密字段脱敏，POST 按「空串清除 / 脱敏回显保留 / 其余为新值」合并，逻辑在 `server/lib/plans.js` 的 `applyQuotaKeysUpdate`） |
 | `GET /web/*` | 静态文件 |
@@ -114,3 +118,37 @@ ai-quota-dashboard/
 - **时区**：一切日期切分按北京时间（GMT+8）计算
 - **端口冲突**：7788 被占则自动 +1 并在终端打印实际地址
 - **口径标注（审核 P1-6/7）**：Codex 金额保留 USD 原值并列示「按汇率 X 折算为 ¥Y」；ZCode/WorkBuddy 卡片显著标注「订阅制 · 等价按量成本，非实际扣费」
+
+## 10. v1.5 持久化与预警
+
+### 10.1 历史归档库（`config/history.sqlite`）
+
+动机：各工具原始日志滚动清理，raw 扫描窗口（`AI_QUOTA_MAX_DAYS`）外的历史永久丢失；每次构建把每日聚合沉淀进本地 SQLite，构建快照时对窗口外日期补缺。约束：只写归档库，绝不碰工具原始库；打开/读写任何失败都降级为纯内存路径（`collectorErrors.history` 记录，不影响看板）。`AI_QUOTA_HISTORY=0` 完全关闭；`AI_QUOTA_CONFIG_DIR` 可把配置目录指到别处（网盘/同步盘上的 WAL 可能被云同步撕裂，建议指本地盘）。
+
+表结构（schema_version 落 `meta`）：
+
+| 表 | 主键 | 列 |
+|---|---|---|
+| `daily` | (date, tool) | requests、input/output/reasoning/cache_read/cache_creation tokens、cost_usd、cost_cny、equivalent_cny、sub_usd、pay_usd、sub_requests、pay_requests、updated_at |
+| `daily_model` | (date, tool, model) | requests、4 类 token、cost_usd、cost_cny、equivalent_cny、updated_at |
+| `alert_log` | rule_key | last_fired_at、status（预警冷却记录） |
+| `meta` | key | value |
+
+写入路径：journal_mode WAL 优先（设置后回读校验），失败降级 DELETE，再失败不开库；脏行指纹缓存（(date,tool[/model]) → 内容 hash）命中跳过 UPSERT，指纹在事务 COMMIT 成功后才并入（ROLLBACK 不更新，宁可重写不可漏写）。
+
+合并口径（`mergeArchived`，纯函数）：
+
+1. **raw 优先**：同 (date, tool) raw 存在则原样保留，归档行只补缺（补缺工具行、整纯归档日两种粒度）；
+2. **归档按当前单价重估**：补缺行以当前 pricer 从 `daily_model` token 重估等价成本（归档存的是写入时点价，直接混编会污染趋势与环比）；实扣 `cost_usd` / `sub_usd` / `pay_usd` **不重估**；
+3. **total 重算**：有补缺的日 `__total` 由合并后的 per-tool 行重算；
+4. **models 全历史桶补缺**：`daily_model` 按 tool+model 聚合（SQL `GROUP BY` 下推）补入 raw 缺失的模型行。
+
+**monthly / total 维度维持 raw-only**（无消费方），不在合并范围。
+
+### 10.2 额度预警引擎（`server/lib/alerts.js`）
+
+- **评估**：纯函数，输入快照 + plans.alerts；三家 provider（智谱/ChatGPT/MiniMax）× {5h, 周窗口} + 当日目标，最多 7 条 firing 事件；`available` 且 usedPercent ≥ 阈值才触发
+- **冷却 key**：以窗口身份（resetAt 绝对时刻）为主；resetAt 缺失时 `fetchedAt + resetMsLeft` 兜底并按 **5 分钟桶量化**（否则倒计时每轮漂移、key 每轮不同，冷却永不命中）；冷却记录存 `alert_log`，SQL 失败自动退化内存实现
+- **webhook URL 掩码**：path+query 即推送密钥——接口回显与日志只允许出现 `scheme://host/` + `••••`，错误消息消毒同样替换完整 URL 与 path 片段
+- **SSRF 防护**：仅允许 http/https 协议（file:/data: 等显式拒绝），10s 超时、不跟随重定向；单条发送失败只记状态不抛
+- **泄露面**：推送文案只含百分比 / 金额 / 倒计时，绝不含 token 或密钥明细；`run` 整体 try/catch，异常不得逃逸拖垮主进程

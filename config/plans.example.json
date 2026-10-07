@@ -13,5 +13,12 @@
     "minimax": { "apiKey": "" },
     "chatgpt": { "accessToken": "" }
   },
-  "dailyGoal": { "cny": 200 }
+  "dailyGoal": { "cny": 200 },
+  "alerts": {
+    "enabled": false,
+    "webhookType": "ntfy",
+    "webhookUrl": "",
+    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
+    "cooldownMinutes": 60
+  }
 }

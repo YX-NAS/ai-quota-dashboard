@@ -24,18 +24,21 @@ function aggregate(rows, pricer) {
 
   const newAgg = () => ({
     requests: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0,
-    cacheReadTokens: 0, costUsd: 0, costCny: 0, equivalentCny: 0,
+    cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0, costCny: 0, equivalentCny: 0,
   });
   const touch = (obj, k) => (obj[k] ||= newAgg());
 
   // 订阅/实扣拆分桶：row.subscription===true 的 costUsd 记入 subUsd（套餐等价），
   // 否则记入 payUsd（真实按量）。仅 Codex 目前有此区分。
+  // 行级归一契约：rows.outputTokens 已含思考 token（采集器负责折叠），
+  // reasoningTokens 仅作其中的思考占比明细——聚合时不得再加一遍，否则双计
   const applyCost = (a, r, p) => {
     a.requests++;
     a.inputTokens += r.inputTokens;
-    a.outputTokens += r.outputTokens + (r.reasoningTokens || 0);
+    a.outputTokens += r.outputTokens;
     a.reasoningTokens += r.reasoningTokens || 0;
     a.cacheReadTokens += r.cacheReadTokens;
+    a.cacheCreationTokens += r.cacheCreationTokens || 0; // 计价金额已含进 costCny，token 字段供展示/对账
     a.subRequests = a.subRequests || 0;
     a.payRequests = a.payRequests || 0;
     a.subUsd = a.subUsd || 0;
@@ -68,8 +71,9 @@ function aggregate(rows, pricer) {
       const dmK = touch(dm, r.model);
       dmK.requests++;
       dmK.inputTokens += r.inputTokens;
-      dmK.outputTokens += r.outputTokens + (r.reasoningTokens || 0);
+      dmK.outputTokens += r.outputTokens;
       dmK.cacheReadTokens += r.cacheReadTokens;
+      dmK.cacheCreationTokens += r.cacheCreationTokens || 0; // 归档 daily_model 需要它做成本重估
       if (p.usd != null) { dmK.costUsd += p.usd; dmK.costCny += p.cny; if (r.subscription) dmK.subscription = true; }
       else if (p.cny != null) { dmK.equivalentCny += p.cny; if (r.subscription) dmK.subscription = true; }
       else dmK.noPrice = true;
@@ -79,8 +83,9 @@ function aggregate(rows, pricer) {
     const m = touch(m0, r.model);
     m.requests++;
     m.inputTokens += r.inputTokens;
-    m.outputTokens += r.outputTokens + (r.reasoningTokens || 0);
+    m.outputTokens += r.outputTokens;
     m.cacheReadTokens += r.cacheReadTokens;
+    m.cacheCreationTokens += r.cacheCreationTokens || 0;
     if (p.usd != null) { m.costUsd += p.usd; m.costCny += p.cny; if (r.subscription) m.subscription = true; }
     else if (p.cny != null) { m.equivalentCny += p.cny; if (r.subscription) m.subscription = true; }
     else m.noPrice = true;
@@ -95,7 +100,7 @@ function aggregate(rows, pricer) {
     total: {
       requests: rows.length,
       inputTokens: rows.reduce((s, r) => s + r.inputTokens, 0),
-      outputTokens: rows.reduce((s, r) => s + r.outputTokens + (r.reasoningTokens || 0), 0),
+      outputTokens: rows.reduce((s, r) => s + r.outputTokens, 0),
     },
   };
 }
@@ -131,7 +136,7 @@ function compareYesterday(rows, pricer, now = Date.now()) {
       if (r.ts < from || r.ts >= to) continue;
       const p = pricer.price(r);
       const cny = p.cny || 0;
-      const tokens = r.inputTokens + r.outputTokens + (r.reasoningTokens || 0);
+      const tokens = r.inputTokens + r.outputTokens;
       total.requests++;
       total.tokens += tokens;
       total.cny += cny;

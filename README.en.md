@@ -30,6 +30,9 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 ![Settings panel](docs/screenshots/settings.png)
 
 - 💸 **Today's spend**: one card per tool with today / week / month costs; subscription tools get an "equivalent pay-as-you-go" estimate so they're comparable with metered ones
+- 💾 **History that survives**: daily aggregates persist into a local SQLite archive (`config/history.sqlite`) — even after source logs rotate away, the "All (archived)" view keeps up to 10 years
+- 📣 **Quota alerts to your phone**: push via ntfy / Bark / ServerChan / generic webhook when 5h / weekly windows or the daily target approach their thresholds, with a cooldown against spam; payloads carry percentages, amounts and countdowns only — never keys or token details
+- 📊 **Weekly & monthly reports**: a seven-section Markdown report (costs vs last period / tool ranking / top-5 models / budget attainment) in one click — copy it into your weekly meeting or download as .md
 - 🎯 **Daily cost target**: set a ¥200/day budget and track remaining budget plus projected exhaustion time in the banner, the percentage in the menu bar, and a system notification when it's used up (💸)
 - 🆚 **vs yesterday**: same-time and full-day comparison, so you can tell at a glance whether today is burning faster
 - 🔌 **MCP server**: let ZCode / Claude Code / Codex answer "how much quota did I burn this week?"
@@ -64,6 +67,8 @@ Windows one-click full setup (server + tray ⚡ + desktop widget) — double-cli
 Launch at login (macOS): System Settings → General → Login Items → add `start-all.sh`.
 Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `start-all.cmd` there.
 
+> 📖 First time? Follow the illustrated step-by-step user guide (Chinese): [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
+
 ## 🧰 What it supports
 
 | Usage collectors (local, read-only) | Data source |
@@ -81,6 +86,8 @@ Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `s
 | MiniMax Token Plan (5h + weekly) | auto-discovered from `~/.workbuddy-ai/models.json`, or set manually |
 
 A tool you don't use? Zero-usage cards collapse into a single "idle tools" row, and quota cards without credentials never render — no fake error cards, ever.
+
+Weekly and monthly bills are covered too: built-in **weekly / monthly reports** render a seven-section Markdown summary in one click (see the user guide).
 
 ## 💰 How costs are calculated
 
@@ -102,11 +109,12 @@ claude mcp add --scope user ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp
 codex mcp add ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp.js
 ```
 
-Exposes `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models`; doubles as a CLI:
+Exposes `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models` / `ai_quota_windows` / `ai_usage_report` (weekly & monthly reports) — six tools; doubles as a CLI:
 
 ```bash
 node mcp/mcp.js today        # today's brief
 node mcp/mcp.js summary 30   # last 30 days
+node mcp/mcp.js report week 1 # last week's report (month for monthly; offset optional)
 ```
 
 ## 🍯 macOS menu bar + desktop widget (optional)
@@ -150,14 +158,21 @@ Everything lives in `config/plans.json` (auto-generated; excluded by gitignore; 
   "plans": { "zcode": { "cnyPerMonth": 598 } },
   "priceOverrides": { "glm-5.3": { "in": 8, "out": 28, "cacheRead": 2 } },
   "quotaKeys": { "zhipu": { "token": "" } },
-  "dailyGoal": { "cny": 200 }
+  "dailyGoal": { "cny": 200 },
+  "alerts": {
+    "enabled": false,                   // quota alert push (off by default)
+    "webhookType": "ntfy",              // ntfy | bark | serverchan | generic
+    "webhookUrl": "",
+    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
+    "cooldownMinutes": 60
+  }
 }
 ```
 
 ## 🧪 Tests
 
 ```bash
-node test/run-tests.js                  # unit tests (pricing / aggregation / forecast)
+node test/run-tests.js                  # unit tests (pricing / aggregation / forecast / archive / alerts / reports — 99 green)
 python3 test/verify-against-sources.py  # cross-check (needs real local data sources)
 ```
 
@@ -186,10 +201,10 @@ It's a single-machine tool by design (local data sources, binds to `127.0.0.1`).
 
 ## 🗺️ Roadmap
 
-- **History persistence** (v1.4 headline): daily snapshots into a local SQLite so history survives source rotation
+- ✅ History persistence (shipped in v1.5): daily aggregates into a local SQLite archive, history survives source rotation
+- ✅ Configurable quota alerts (shipped in v1.5): four push channels and thresholds in the Settings panel
 - **Web UI i18n**: the interface is currently Chinese-only — PRs welcome
 - **Update check**: read-only GitHub Releases polling (opt-in)
-- **Configurable alert thresholds** across all surfaces
 - Signed & notarized macOS binaries for one-click Release downloads
 
 ## 🪟 Windows note
@@ -208,7 +223,7 @@ The Windows tray / desktop widget (`tray.ps1` / `widget.ps1`) are in **community
 ```
 server/index.js         HTTP server + 60s refresh loop
 server/collectors/      4 usage collectors + 3 real-time quota collectors
-server/lib/             pricing / aggregation / config
+server/lib/             pricing / aggregation / config + history.js (archive) / alerts.js / report.js
 web/                    zero-dependency frontend
 mcp/mcp.js              MCP server (doubles as CLI)
 menubar/                macOS menu bar (Swift) + Windows tray (PowerShell), optional
@@ -217,7 +232,7 @@ start-all / stop-all    one-click start/stop (.sh = macOS/Linux, .cmd = Windows)
 scripts/                helpers (token sync, demo data, Windows start/stop logic)
 config/plans.json       user config (auto-generated, not committed)
 test/                   unit tests + data cross-check
-docs/                   design doc + screenshots
+docs/                   design doc + screenshots + illustrated user guide (USER_GUIDE.md, Chinese)
 ```
 
 ## License

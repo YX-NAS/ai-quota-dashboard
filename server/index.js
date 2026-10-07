@@ -22,6 +22,9 @@ const path = require('node:path');
 const plansStore = require('./lib/plans');
 const { makePricer, DEFAULT_PRICING } = require('./lib/pricing');
 const { aggregate, compareYesterday } = require('./lib/store');
+const history = require('./lib/history');
+const alerts = require('./lib/alerts');
+const { buildReport } = require('./lib/report');
 const zcode = require('./collectors/zcode');
 const ccswitch = require('./collectors/ccswitch');
 const workbuddy = require('./collectors/workbuddy');
@@ -51,6 +54,21 @@ async function buildSnapshot() {
     if (v.error) errors[k] = v.error;
   }
 
+  // 历史归档：聚合结果落库 + 归档补缺合并（raw 优先、archive 只补缺）。
+  // 容错：归档库打开/读写任何失败只记 collectorErrors.history，绝不阻塞快照主流程
+  try {
+    if (history.syncFromAgg(agg)) {
+      const merged = history.mergeArchived(agg.daily, agg.models, pricer);
+      if (merged) {
+        agg.daily = merged.daily;
+        agg.dailyKeys = merged.dailyKeys;
+        agg.models = merged.models;
+      }
+    }
+  } catch (e) {
+    errors.history = e.message;
+  }
+
   // ChatGPT / MiniMax / 智谱 实时额度（尽力而为，失败不阻塞快照）
   const quotaTimeout = p => Promise.race([p, new Promise(r => setTimeout(() => r(null), 10_000))]);
   let chatgptQuotaData = null, minimaxQuotaData = null, zhipuQuotaData = null;
@@ -77,7 +95,12 @@ async function ensureFresh(force = false) {
   if (!force && cache.payload && age < REFRESH_MS) return cache.payload;
   if (building) return building; // 已在构建：并发调用等同一个 Promise
   building = buildSnapshot()
-    .then(p => { cache.payload = p; cache.builtAt = p.builtAt; return p; })
+    .then(p => {
+      cache.payload = p; cache.builtAt = p.builtAt;
+      // 额度预警：构建成功后异步评估推送（内部整体 try/catch，不 await、不影响 API 响应）
+      alerts.run(p, plansStore.load()).catch(() => {});
+      return p;
+    })
     .finally(() => { building = null; });
   return building;
 }
@@ -123,7 +146,7 @@ const requestHandler = async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
     if (url.pathname === '/api/summary') {
-      const days = Math.min(Number(url.searchParams.get('days')) || 30, 365);
+      const days = Math.min(Number(url.searchParams.get('days')) || 30, 3650); // 归档后历史可远超 raw 扫描窗口
       const snap = await ensureFresh();
       // 只回最近 N 天的 daily
       const cutoff = new Date(Date.now() - days * 86400e3 + 8 * 3600e3).toISOString().slice(0, 10);
@@ -133,6 +156,17 @@ const requestHandler = async (req, res) => {
     if (url.pathname === '/api/refresh') {
       const snap = await ensureFresh(true);
       return sendJson(res, 200, { ok: true, builtAt: snap.builtAt });
+    }
+    if (url.pathname === '/api/report') {
+      const type = url.searchParams.get('type') === 'month' ? 'month' : 'week';
+      const offsetRaw = Number(url.searchParams.get('offset'));
+      // 上限按周期区分：周 ≤520（十年）、月 ≤120（十年）；非法值一律钳回本期
+      const maxOffset = type === 'month' ? 120 : 520;
+      const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 && offsetRaw <= maxOffset
+        ? Math.floor(offsetRaw) : 0;
+      const snap = await ensureFresh();
+      const r = buildReport(snap.agg, snap.plans, { type, offset });
+      return sendJson(res, 200, { ok: true, title: r.title, markdown: r.markdown, data: r.data });
     }
     if (url.pathname === '/api/plans' && req.method === 'GET') {
       const out = plansStore.maskQuotaKeys(plansStore.load());
@@ -211,11 +245,12 @@ async function main() {
   console.log(`[ai-quota] 看板已启动 → http://localhost:${port}`);
   console.log(`[ai-quota] 每 ${REFRESH_MS / 1000}s 自动重扫本地数据；首次构建中…`);
   ensureFresh(true).then(snap => {
-    console.log(`[ai-quota] 首次构建完成：${snap.rowStats.zcode + snap.rowStats.ccswitch + snap.rowStats.workbuddy} 条请求`);
+    console.log(`[ai-quota] 首次构建完成：${snap.rowStats.zcode + snap.rowStats.ccswitch + snap.rowStats.workbuddy + snap.rowStats.claudeCode} 条请求`);
   }).catch(e => console.error('[ai-quota] 构建失败:', e.message));
   setInterval(() => ensureFresh().catch(() => {}), REFRESH_MS);
 }
 
 if (require.main === module) main();
 
-module.exports = { buildSnapshot, ensureFresh, hostAllowed, writePortFile };
+// requestHandler 一并导出：集成测试在临时端口上直接挂它起服务，不必走 main() 监听
+module.exports = { buildSnapshot, ensureFresh, requestHandler, hostAllowed, writePortFile };

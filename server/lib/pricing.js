@@ -3,7 +3,8 @@
 // 单价可在 config/plans.json 的 priceOverrides 里覆盖
 
 const DEFAULT_PRICING = {
-  // 元 / 百万 tokens。cacheRead: 缓存命中输入价
+  // 元 / 百万 tokens。cacheRead: 缓存命中输入价；
+  // cacheWrite（缓存写入价）不预填——缺省按输入价计 cache_creation（诚实口径），可被 priceOverrides 覆盖
   'glm-5.3':        { in: 8,   out: 28,  cacheRead: 2 },
   'glm-5.2':        { in: 8,   out: 28,  cacheRead: 2 },
   'glm-5.3-flash':  { in: 0.8, out: 2.8, cacheRead: 0.23 },
@@ -42,8 +43,9 @@ function makePricer(plans) {
     const cached = Math.min(row.cacheReadTokens || 0, row.inputTokens || 0);
     const plainIn = (row.inputTokens || 0) - cached;
     const inCost = plainIn / 1e6 * p.in + (p.cacheRead != null ? cached / 1e6 * p.cacheRead : cached / 1e6 * p.in);
+    const ccCost = (row.cacheCreationTokens || 0) / 1e6 * (p.cacheWrite ?? p.in); // 缓存写入：无覆盖价时按输入价
     const outCost = (row.outputTokens || 0) / 1e6 * p.out;
-    const cny = inCost + outCost;
+    const cny = inCost + ccCost + outCost;
     return { usd: null, cny, equivalent: true };
   }
 

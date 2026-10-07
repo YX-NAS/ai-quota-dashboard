@@ -26,6 +26,14 @@ const TEMPLATE = {
     minimax: { apiKey: '' },
     chatgpt: { accessToken: '' },
   },
+  // 额度预警 webhook 推送：默认关闭（webhookUrl 即推送密钥，接口只出掩码形态）
+  alerts: {
+    enabled: false,
+    webhookType: 'ntfy',   // ntfy | bark | serverchan | generic
+    webhookUrl: '',
+    thresholds: { fiveHour: 85, weekly: 85, dailyGoalPct: 100 }, // 触发阈值（百分比）
+    cooldownMinutes: 60,   // 同一事件的冷却窗（分钟）
+  },
 };
 
 // 各工具 key 字段里属于机密的（接口返回需脱敏，保存时区分「未改动回显」与「新值」）
@@ -43,7 +51,22 @@ function maskSecret(s) {
   return v.length > 12 ? v.slice(0, 4) + '…' + v.slice(-4) : '••••';
 }
 
-// GET 用：返回配置副本，机密字段脱敏（org/project 等非机密保持原值）
+// webhookUrl 合法性：必须是可解析的 http(s) URL（file:/data: 等一律拒绝）
+function isHttpUrl(v) {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch { return false; }
+}
+
+// alerts.webhookUrl 掩码（单一实现放 alerts.js，这里惰性 require 避免顶层循环依赖：
+// alerts → history → plans，若 plans 顶层再 require alerts 会拿到半初始化模块）
+function maskWebhookUrl(url) {
+  return require('./alerts').maskWebhookUrl(url);
+}
+
+// GET 用：返回配置副本，机密字段脱敏（org/project 等非机密保持原值）；
+// alerts.webhookUrl 同属机密（path 即推送密钥），一并出掩码形态
 function maskQuotaKeys(cfg) {
   const out = JSON.parse(JSON.stringify(cfg || {}));
   const qk = out.quotaKeys || {};
@@ -52,6 +75,9 @@ function maskQuotaKeys(cfg) {
     for (const f of spec.secrets) qk[tool][f] = maskSecret(qk[tool][f]);
   }
   out.quotaKeys = qk;
+  if (out.alerts && out.alerts.webhookUrl != null) {
+    out.alerts = Object.assign({}, out.alerts, { webhookUrl: maskWebhookUrl(out.alerts.webhookUrl) });
+  }
   return out;
 }
 
@@ -93,13 +119,13 @@ function applyPlansUpdate(current, body) {
       if (n === null || (Number.isFinite(n) && n >= 0)) next.plans[k][f] = n;
     }
   }
-  // 模型单价覆盖：in/out/cacheRead 必须有限非负数，非法剔除该字段；全空 = 清除该模型覆盖
+  // 模型单价覆盖：in/out/cacheRead/cacheWrite 必须有限非负数，非法剔除该字段；全空 = 清除该模型覆盖
   if (body && body.priceOverrides && typeof body.priceOverrides === 'object') {
     const po = {};
     for (const [m, o] of Object.entries(body.priceOverrides)) {
       if (!o || typeof o !== 'object') continue;
       const e = {};
-      for (const f of ['in', 'out', 'cacheRead']) {
+      for (const f of ['in', 'out', 'cacheRead', 'cacheWrite']) {
         const n = num(o[f]);
         if (o[f] != null && o[f] !== '' && Number.isFinite(n) && n >= 0) e[f] = n;
       }
@@ -113,6 +139,37 @@ function applyPlansUpdate(current, body) {
   if (body && body.dailyGoal && typeof body.dailyGoal === 'object') {
     const n = num(body.dailyGoal.cny);
     if (Number.isFinite(n) && n >= 0) next.dailyGoal = { cny: n };
+  }
+  // 额度预警：白名单合并（enabled 布尔 / webhookType 枚举 / 阈值 0~100 / cooldown 正整数 /
+  // webhookUrl 仅 http(s)）。webhookUrl 合并语义与 quotaKeys secrets 一致：
+  // 提交值 === 掩码回显 → 未改动保留原值；空串 → 清除；其余合法新值 → 覆盖；非法 → 剔除保留原值
+  if (body && body.alerts && typeof body.alerts === 'object') {
+    const cur = next.alerts || JSON.parse(JSON.stringify(TEMPLATE.alerts)); // 老配置无 alerts 块时以模板打底
+    const inc = body.alerts;
+    const out = Object.assign({}, cur);
+    if (typeof inc.enabled === 'boolean') out.enabled = inc.enabled;
+    if (typeof inc.webhookType === 'string' && ['ntfy', 'bark', 'serverchan', 'generic'].includes(inc.webhookType)) {
+      out.webhookType = inc.webhookType;
+    }
+    if (inc.thresholds && typeof inc.thresholds === 'object') {
+      const t = Object.assign({}, out.thresholds);
+      for (const f of ['fiveHour', 'weekly', 'dailyGoalPct']) {
+        const n = num(inc.thresholds[f]);
+        if (inc.thresholds[f] != null && inc.thresholds[f] !== '' && Number.isFinite(n) && n >= 0 && n <= 100) t[f] = n;
+      }
+      out.thresholds = t;
+    }
+    if (inc.cooldownMinutes != null && inc.cooldownMinutes !== '') {
+      const n = num(inc.cooldownMinutes);
+      if (Number.isInteger(n) && n > 0) out.cooldownMinutes = n;
+    }
+    if ('webhookUrl' in inc) {
+      const v = String(inc.webhookUrl ?? '').trim();
+      if (v === '') out.webhookUrl = '';
+      else if (v === maskWebhookUrl(cur.webhookUrl)) out.webhookUrl = cur.webhookUrl;
+      else if (isHttpUrl(v)) out.webhookUrl = v;
+    }
+    next.alerts = out;
   }
   return next;
 }
@@ -160,5 +217,5 @@ function save(next) {
 
 module.exports = {
   load, save, maskQuotaKeys, applyQuotaKeysUpdate, applyPlansUpdate,
-  maskSecret, QUOTA_KEY_FIELDS, CONFIG_DIR, PLANS_FILE,
+  maskSecret, maskWebhookUrl, QUOTA_KEY_FIELDS, CONFIG_DIR, PLANS_FILE,
 };

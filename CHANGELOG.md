@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.0（2026-10-07）
+
+### ✨ 新功能
+
+- **历史数据持久化**：每次构建把每日聚合自动写入 `config/history.sqlite`（含 -wal/-shm 伴生文件），原始工具日志被滚动清理后历史不丢；每日明细新增「全部（归档）」选项（days=3650，约十年）。环境变量 `AI_QUOTA_HISTORY=0` 可关闭（回到纯实时扫描）；归档库损坏自动降级不影响看板。兼容：老 `plans.json` 无 `alerts` key 自动补默认值；归档行按当前单价重估（改价后历史跟随新价，实扣 costUsd 不重估）
+- **额度预警推送**：设置面板新增「额度预警推送」区（默认关闭）——启用开关 + 四通道（ntfy / Bark / Server酱 / 通用 Webhook JSON）+ 推送地址（脱敏回显，与额度 Key 同语义：不改=保留、清空=停用）+ 三个阈值（5h 窗口 85%、周窗口 85%、当日目标 100%，可调 0~100）+ 冷却分钟（默认 60）。服务每 60s 重建快照后评估触发；推送内容只含百分比/金额/倒计时，绝不含密钥或 token 明细；预警冷却记录存 history.sqlite（`AI_QUOTA_HISTORY=0` 时内存，重启后会重推一次）
+- **周报 · 月报**：网页新增「周报 · 月报」区块（趋势图之后）——周/月切换、上一期/下一期、复制 Markdown、下载 .md；内容七节：标题（周期起止）/ 总览（成本·请求·token 环比）/ 工具榜 / 模型榜 Top5 / 最贵的一天 / 预算达成率 / 口径脚注。周 = 北京时间 ISO 周（周一起）。API：`GET /api/report?type=week|month&offset=N`（week≤520、month≤120）；MCP 新工具 `ai_usage_report(type, offset)`；CLI：`node mcp/mcp.js report week|month [offset]`
+- 单价表支持可选 `cacheWrite` 字段（缓存写入价）：缺省按输入价计 cache_creation，可 `priceOverrides` 覆盖
+
+### 🛠 正确性修复
+
+- 首次构建日志漏计 Claude Code 行数（首轮扫描丢行）
+- 缓存写入 token（cache_creation）此前未计价——现按 cacheWrite 单价（缺省输入价）计入等价成本
+- ZCode 思考 token 计价口径统一：归档重估与实时一致，消除 +2.6% 漂移
+- MCP 报表补归档合并（周月报 / 汇总工具的数据源与网页对齐，含历史归档日）
+
+### ⚡ 性能
+
+- 归档写入脏行指纹缓存：内容未变的行跳过 UPSERT，稳态每 60s 由约 900 行写入降到 0~10 行/分钟
+- 归档合并全历史 (tool,model) 聚合下推为 SQL `GROUP BY`，省掉 JS 全表遍历
+
+### 🧪 测试
+
+- 单元测试 35 → **99**（历史归档合并、预警引擎、周月报生成、cacheWrite 计价、配置兼容）
+
 ## 1.4.0（2026-09-28）
 
 ### ✨ 新功能

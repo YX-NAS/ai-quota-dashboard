@@ -220,6 +220,7 @@ function todayKey() {
 function monthKey() { return todayKey().slice(0, 7); }
 function weekStartKey() {
   // 北京时间本周一（ISO 周，周一为一周开始）
+  // 注意：周/月报的周期切分在后端 server/lib/report.js 的 weekStart() 里另有一份同口径实现，改口径需两处同步
   const n = new Date(Date.now() + 8 * 3600e3);
   n.setUTCDate(n.getUTCDate() - (n.getUTCDay() + 6) % 7);
   return n.toISOString().slice(0, 10);
@@ -547,6 +548,35 @@ function renderPriceEditor(p) {
     <button type="button" id="priceReset" class="seg">全部恢复默认价</button>`;
 }
 
+// 预警推送编辑器：webhookUrl 与额度 Key 同一套三态语义（脱敏回显不改 = 保留；清空 = 关闭推送配置；新值 = 覆盖）
+const ALERT_WEBHOOK_HINTS = {
+  ntfy: 'https://ntfy.sh/你的主题名（手机装 ntfy App 订阅同名主题即收推送）',
+  bark: 'https://api.day.app/你的Key（iOS Bark App 里复制）',
+  serverchan: 'https://sctapi.ftqq.com/你的SendKey.send（Server酱·微信推送）',
+  generic: '任意接收 JSON POST 的 webhook 地址（body 含 title/message/severity/source）',
+};
+function renderAlertsEditor(p) {
+  const a = p.alerts || {};
+  const th = a.thresholds || {};
+  const type = ALERT_WEBHOOK_HINTS[a.webhookType] ? a.webhookType : 'ntfy';
+  return `<hr><div class="qk-hint">🔔 额度预警推送 —— 阈值触发后推送到手机（ntfy / Bark / Server酱 / 自定义 webhook）。推送内容只含百分比与金额，不含任何密钥；默认关闭</div>
+    <label class="ck"><input id="sAlertOn" type="checkbox" ${a.enabled ? 'checked' : ''}> 启用预警推送</label>
+    <label>推送通道</label>
+    <select id="sAlertType">${Object.entries(ALERT_WEBHOOK_HINTS).map(([k, v]) =>
+      `<option value="${k}" ${k === type ? 'selected' : ''}>${{ ntfy: 'ntfy（iPhone / Android / 桌面）', bark: 'Bark（iOS）', serverchan: 'Server酱（微信）', generic: '通用 Webhook（JSON）' }[k]}</option>`).join('')}</select>
+    <label>推送地址（已配置显示为脱敏，不改即保留；清空 = 停用推送）</label>
+    <input id="sAlertUrl" type="text" value="${a.webhookUrl || ''}" placeholder="${ALERT_WEBHOOK_HINTS[type]}" spellcheck="false">
+    <div class="qk-hint" id="sAlertHint">${ALERT_WEBHOOK_HINTS[type]}</div>
+    <label>触发阈值（百分比 ≥ 即推送，0~100）</label>
+    <div class="th-row">
+      <span>5h 窗口 <input id="sTh5h" type="number" min="0" max="100" value="${th.fiveHour ?? 85}">%</span>
+      <span>周窗口 <input id="sThWk" type="number" min="0" max="100" value="${th.weekly ?? 85}">%</span>
+      <span>当日目标 <input id="sThGoal" type="number" min="0" max="100" value="${th.dailyGoalPct ?? 100}">%</span>
+    </div>
+    <label>同一事件冷却（分钟，间隔内不重复推送）</label>
+    <input id="sAlertCd" type="number" min="1" step="1" value="${a.cooldownMinutes ?? 60}">`;
+}
+
 // 设置面板
 const dlg = document.getElementById('settingsDlg');
 const QUOTA_KEY_FIELDS = [
@@ -572,10 +602,15 @@ document.getElementById('settingsBtn').onclick = async () => {
       `<label>${label}</label>
        <input data-qk-tool="${t}" data-qk-field="${f}" type="text" value="${(qk[t] || {})[f] || ''}" placeholder="未配置 · 自动发现" spellcheck="false">`
     ).join('') +
+    renderAlertsEditor(p) +
     renderPriceEditor(p);
   dlg.showModal();
   document.getElementById('priceReset').onclick = () => {
     document.querySelectorAll('[data-price]').forEach(el => { el.value = ''; });
+  };
+  // 切换推送通道时同步地址提示
+  document.getElementById('sAlertType').onchange = e => {
+    document.getElementById('sAlertHint').textContent = ALERT_WEBHOOK_HINTS[e.target.value] || '';
   };
 };
 document.getElementById('settingsCancel').onclick = () => dlg.close();
@@ -598,10 +633,22 @@ document.getElementById('settingsSave').onclick = async () => {
     const m = el.dataset.price, f = el.dataset.pf;
     if (el.value !== '') (priceOverrides[m] = priceOverrides[m] || {})[f] = Number(el.value);
   });
+  // 预警推送：webhookUrl 原样提交（脱敏回显后端识别为「未改动」，空串 = 清除）
+  const alerts = {
+    enabled: document.getElementById('sAlertOn').checked,
+    webhookType: document.getElementById('sAlertType').value,
+    webhookUrl: document.getElementById('sAlertUrl').value.trim(),
+    thresholds: {
+      fiveHour: Number(document.getElementById('sTh5h').value),
+      weekly: Number(document.getElementById('sThWk').value),
+      dailyGoalPct: Number(document.getElementById('sThGoal').value),
+    },
+    cooldownMinutes: Number(document.getElementById('sAlertCd').value),
+  };
   try {
     const r = await fetch('/api/plans', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ usdCnyRate: Number(document.getElementById('sFx').value), dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 }, plans, quotaKeys, priceOverrides }),
+      body: JSON.stringify({ usdCnyRate: Number(document.getElementById('sFx').value), dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 }, plans, quotaKeys, priceOverrides, alerts }),
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -634,6 +681,152 @@ document.getElementById('daySeg').addEventListener('click', e => {
     load();
   }
 });
+
+// ---------- 周/月报（数据来自 GET /api/report?type=&offset=，服务端路由接线前先备好错误态） ----------
+const reportState = { type: 'week', offset: 0, data: null, error: false };
+
+// 极简 Markdown 渲染：先整体转义 HTML 再套受控标签，其余行原样落 <pre>——内容永远不可能注入
+// 支持：# ## ### 标题 / **加粗** / - 列表 / | 表格 | / > 引用
+function mdToHtml(md) {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const inline = s => esc(s).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  const lines = String(md || '').split('\n');
+  let html = '', pre = [], i = 0;
+  const flushPre = () => { if (pre.length) { html += '<pre>' + esc(pre.join('\n')) + '</pre>'; pre = []; } };
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
+    let m;
+    if ((m = line.match(/^(#{1,3})\s+(.*)$/))) {          // 标题
+      flushPre();
+      html += '<h' + m[1].length + '>' + inline(m[2]) + '</h' + m[1].length + '>';
+      i++;
+    } else if (/^>\s?/.test(line)) {                      // 引用（连续行合并为一段）
+      flushPre();
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i].trimEnd())) {
+        buf.push(lines[i].trimEnd().replace(/^>\s?/, ''));
+        i++;
+      }
+      html += '<blockquote>' + inline(buf.join('\n')).replace(/\n/g, '<br>') + '</blockquote>';
+    } else if (/^[-*]\s+/.test(line)) {                   // 无序列表
+      flushPre();
+      const items = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trimEnd())) {
+        items.push('<li>' + inline(lines[i].trimEnd().replace(/^[-*]\s+/, '')) + '</li>');
+        i++;
+      }
+      html += '<ul>' + items.join('') + '</ul>';
+    } else if (/^\|.*\|$/.test(line.trim())) {            // 表格（跳过 |---|---| 分隔行）
+      flushPre();
+      const rows = [];
+      while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) {
+        const cells = lines[i].trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+        if (!cells.every(c => /^:?-{3,}:?$/.test(c))) rows.push(cells);
+        i++;
+      }
+      if (rows.length) {
+        html += '<table><tr>' + rows[0].map(c => '<th>' + inline(c) + '</th>').join('') + '</tr>';
+        for (let r = 1; r < rows.length; r++) html += '<tr>' + rows[r].map(c => '<td>' + inline(c) + '</td>').join('') + '</tr>';
+        html += '</table>';
+      }
+    } else if (!line.trim()) {                            // 空行：断块
+      flushPre();
+      i++;
+    } else {                                              // 其余语法不认识 → 原样 <pre>
+      pre.push(line);
+      i++;
+    }
+  }
+  flushPre();
+  return html;
+}
+
+function renderReport() {
+  const box = document.getElementById('reportBody');
+  const titleEl = document.getElementById('reportTitle');
+  document.getElementById('reportNext').disabled = reportState.offset <= 0;
+  if (reportState.error) {
+    titleEl.textContent = '';
+    // 与顶部错误横幅同款风格：占位文案 + 重试
+    box.innerHTML = '<div class="err-banner"><span>⚠️ 报表暂不可用（/api/report 未响应或尚未接线）</span><button id="reportRetry" class="seg">重试</button></div>';
+    const b = document.getElementById('reportRetry');
+    if (b) b.onclick = loadReport;
+    return;
+  }
+  const d = reportState.data;
+  if (!d) { box.innerHTML = '<div class="skeleton-line">报表生成中…</div>'; return; }
+  titleEl.textContent = d.title + (reportState.offset > 0 ? `（往回第 ${reportState.offset} 期）` : '（本期）');
+  box.innerHTML = mdToHtml(d.markdown);
+}
+
+let reportSeq = 0; // 请求序号：快速切换周期/类型时并发多个 fetch，晚到的旧响应不得覆盖新状态
+async function loadReport() {
+  const seq = ++reportSeq;
+  const box = document.getElementById('reportBody');
+  reportState.error = false;
+  reportState.data = null;
+  box.innerHTML = '<div class="skeleton-line">报表生成中…</div>';
+  document.getElementById('reportTitle').textContent = '';
+  document.getElementById('reportNext').disabled = reportState.offset <= 0;
+  try {
+    const r = await fetch('/api/report?type=' + reportState.type + '&offset=' + reportState.offset);
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) throw new Error('HTTP ' + r.status);
+    if (seq !== reportSeq) return; // 已有更新的请求在途：丢弃过期响应
+    reportState.data = j;
+  } catch {
+    if (seq !== reportSeq) return;
+    reportState.error = true;
+  }
+  renderReport();
+}
+
+// 复制 Markdown：优先 clipboard API，降级 execCommand；结果用 toast 给按钮反馈
+async function copyReportMd() {
+  if (!reportState.data) return;
+  const md = reportState.data.markdown;
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(md); ok = true; }
+  } catch { ok = false; }
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = md;
+    ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+  }
+  toast(ok ? 'Markdown 已复制' : '复制失败，请手动选择报表文本');
+}
+
+// 下载 .md：Blob + a[download]（不用 data URI，避免长文被 URL 编码放大）
+function downloadReportMd() {
+  if (!reportState.data) return;
+  const blob = new Blob([reportState.data.markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ai-quota-${reportState.type}-report-${(reportState.data.data || {}).start || ymd()}.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+document.getElementById('reportTypeSeg').addEventListener('click', e => {
+  const t = e.target.dataset.t;
+  if (!t || t === reportState.type) return;
+  reportState.type = t;
+  reportState.offset = 0;
+  document.querySelectorAll('#reportTypeSeg button').forEach(b => b.classList.toggle('on', b === e.target));
+  loadReport();
+});
+document.getElementById('reportPrev').addEventListener('click', () => { reportState.offset++; loadReport(); });
+document.getElementById('reportNext').addEventListener('click', () => { if (reportState.offset > 0) { reportState.offset--; loadReport(); } });
+document.getElementById('reportCopy').addEventListener('click', copyReportMd);
+document.getElementById('reportDownload').addEventListener('click', downloadReportMd);
 
 // ---------- 数据导出（CSV 带 \uFEFF BOM，保 Excel 打开中文不乱码；data URI 下载） ----------
 function download(name, content, mime) {
@@ -824,4 +1017,5 @@ enableCardDnD('quotaCards');
 setTimeout(() => document.body.classList.remove('anim-once'), 1600);
 
 load();
+loadReport();
 setInterval(load, 60_000);

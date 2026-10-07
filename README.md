@@ -33,7 +33,10 @@
 
 - 💸 **今天花了多少**：五张工具卡片，今日 / 本月 / 本周费用一目了然；订阅制工具自动折算「等价成本」，和真扣费的工具放在一起比
 - ⏳ **额度还剩多少**：ChatGPT、智谱 Coding Plan、MiniMax 的 5 小时窗口和周额度实时进度条，>60% 变黄、>85% 变红，带重置倒计时
-- 📈 **照这么用下去要花多少**：月底线性预估；30 天堆叠趋势图 + 每日明细（7/30/90 天切换）
+- 📈 **照这么用下去要花多少**：月底线性预估；30 天堆叠趋势图 + 每日明细（7/30/90 天 + 全部·归档切换）
+- 💾 **历史不丢**：每日聚合自动沉淀进本地 SQLite 归档库（`config/history.sqlite`），工具原始日志被清理后照样能翻「全部（归档）」，最多看 10 年
+- 📣 **额度预警推送**：5h 窗口 / 周窗口 / 当日目标逼近阈值时推到手机（ntfy / Bark / Server酱 / 通用 Webhook），带冷却防轰炸；推送内容只有百分比和倒计时，不含任何密钥
+- 📊 **周报 · 月报**：一键生成七节 Markdown 报告（成本环比 / 工具榜 / 模型榜 Top5 / 预算达成率），复制即贴周会，也可下载 .md
 - 📤 **数据带得走**：每日明细 / 模型费用一键导出 CSV，整份快照导出 JSON——数据属于你
 - 🎯 **当日目标成本**：给每天定个 ¥200 的成本目标，横幅里看剩余预算、预计用完时间，菜单栏看百分比，用完/超支弹系统通知提醒（💸）
 - 🆚 **和昨天比**：今日同期 vs 昨日同期、昨日全天，一眼看出今天烧得快不快
@@ -69,6 +72,8 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 开机自启（macOS）：系统设置 → 通用 → 登录项 → 添加 `start-all.sh`；
 开机自启（Windows）：`Win+R` 输入 `shell:startup`，把 `start-all.cmd` 的快捷方式放进去。
 
+> 📖 第一次用？从装 Node.js 到预警推手机，看**图文上手手册**：[docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
+
 ## 🧰 支持哪些工具
 
 | 用量统计（读本地记录，只读） | 数据来源 |
@@ -86,6 +91,8 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 | MiniMax Token Plan（5h + 周） | `~/.workbuddy-ai/models.json` 自动发现，或手动填 |
 
 没装的工具？零用量的卡片自动折叠成一行「未启用的工具」，查不到凭证的额度卡干脆不出现，绝不给你看假错误。
+
+每周 / 每月的账也一样清楚：内置**周报 · 月报**，一键复制七节 Markdown 报告（详见[图文手册](docs/USER_GUIDE.md)）。
 
 ## 💰 钱是怎么算的（口径很重要）
 
@@ -107,11 +114,12 @@ claude mcp add --scope user ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp
 codex mcp add ai-quota -- node /path/to/ai-quota-dashboard/mcp/mcp.js
 ```
 
-提供 `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models` / `ai_quota_windows` 五个工具，也能当 CLI 直接跑：
+提供 `ai_usage_summary` / `ai_usage_today` / `ai_usage_tool` / `ai_usage_models` / `ai_quota_windows` / `ai_usage_report`（周月报）六个工具，也能当 CLI 直接跑：
 
 ```bash
 node mcp/mcp.js today        # 今日简报
 node mcp/mcp.js summary 30   # 近 30 天汇总
+node mcp/mcp.js report week 1 # 上一周的周报（month 为月报，可选 offset）
 ```
 
 ## 🍯 macOS 菜单栏 + 桌面卡片（可选）
@@ -155,14 +163,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop\widget.ps1   # 桌�
   "plans": { "zcode": { "cnyPerMonth": 598 } },  // 各工具月额度（等价 ¥）
   "priceOverrides": { "glm-5.3": { "in": 8, "out": 28, "cacheRead": 2 } },
   "quotaKeys": { "zhipu": { "token": "" } },      // 实时额度凭证，留空 = 自动发现
-  "dailyGoal": { "cny": 200 }           // 当日目标成本
+  "dailyGoal": { "cny": 200 },          // 当日目标成本
+  "alerts": {                           // 额度预警推送（默认关闭，字段说明见手册）
+    "enabled": false,
+    "webhookType": "ntfy",              // ntfy | bark | serverchan | generic
+    "webhookUrl": "",
+    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
+    "cooldownMinutes": 60
+  }
 }
 ```
 
 ## 🧪 测试
 
 ```bash
-node test/run-tests.js                  # 单元测试（计价 / 聚合 / 预估）
+node test/run-tests.js                  # 单元测试（计价 / 聚合 / 预估 / 归档 / 预警 / 报表，99 项全绿）
 python3 test/verify-against-sources.py  # 独立复算今日数据，和页面对账
 ```
 
@@ -191,10 +206,10 @@ node 首次监听端口时 Windows 会问一次「允许访问」，点允许即
 
 ## 🗺️ Roadmap
 
-- **历史数据持久化**（v1.4 头牌）：每日聚合快照写入本地 SQLite，原始库滚动清理后历史不丢
+- ✅ 历史数据持久化（v1.5 已交付）：每日聚合写入本地 SQLite，原始日志清理后历史不丢
+- ✅ 额度预警全端可配置（v1.5 已交付）：四通道推送与阈值进设置面板
 - **Web 端英文化**：界面 i18n（当前 README.en 读者点进来是中文 UI，欢迎 PR）
 - **版本更新检查**：只读轮询 GitHub Releases 提示新版本（可关）
-- **额度预警全端可配置**：阈值与通知通道进设置面板
 - macOS 二进制签名公证：让 Release 下载的 App 免除右键打开步骤（需要 Apple 开发者账号）
 
 ## 🪟 Windows 端说明
@@ -213,7 +228,7 @@ Windows 托盘 / 桌面卡片（`tray.ps1` / `widget.ps1`）为**社区验证阶
 ```
 server/index.js         HTTP 服务 + 60s 定时刷新
 server/collectors/      4 个用量采集器 + 3 个实时额度采集器
-server/lib/             计价 / 聚合 / 配置
+server/lib/             计价 / 聚合 / 配置 + history.js（归档）/ alerts.js（预警）/ report.js（周月报）
 web/                    前端单页（零依赖）
 mcp/mcp.js              MCP Server（兼 CLI）
 menubar/                macOS 菜单栏（Swift）+ Windows 托盘（PowerShell，可选）
@@ -222,7 +237,7 @@ start-all / stop-all    一键启动/停止（.sh = macOS/Linux，.cmd = Windows
 scripts/                辅助脚本（token 同步、演示数据、Windows 启停逻辑）
 config/plans.json       用户配置（自动生成，不进版本库）
 test/                   单元测试 + 数据核验
-docs/                   设计文档 + 截图
+docs/                   设计文档 + 截图 + 图文手册（USER_GUIDE.md）
 ```
 
 ## License

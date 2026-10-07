@@ -33,7 +33,10 @@ function collect(dbPath = DB) {
         ts,
         model: r.model_id || 'unknown',
         inputTokens: r.input_tokens || 0,
-        outputTokens: r.output_tokens || 0,
+        // 行级归一：outputTokens = 普通输出 + 思考（GLM 计费思考按输出价），
+        // 与 claudeCode（Anthropic 语义 output_tokens 本就含思考）口径对齐；
+        // 否则归档 daily_model（只有合并列）重估会按含思考的输出计价，与 raw 出现 ~2-3% 漂移
+        outputTokens: (r.output_tokens || 0) + (r.reasoning_tokens || 0),
         reasoningTokens: r.reasoning_tokens || 0,
         cacheReadTokens: r.cache_read_input_tokens || 0,
         cacheCreationTokens: r.cache_creation_input_tokens || 0,

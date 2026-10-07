@@ -46,12 +46,32 @@
   <div id="chartBox"></div>
 </section>
 
+<section id="reportBox">
+  <h2>周报 · 月报
+    <span class="seg" id="reportTypeSeg">
+      <button data-t="week" class="on">周报</button>
+      <button data-t="month">月报</button>
+    </span>
+    <span class="seg">
+      <button id="reportPrev" title="往回看一期">‹ 上一期</button>
+      <button id="reportNext" title="回到最近一期">下一期 ›</button>
+    </span>
+    <span class="seg">
+      <button id="reportCopy" title="复制报表 Markdown 源文本">复制 Markdown</button>
+      <button id="reportDownload" title="下载报表 .md 文件">下载 .md</button>
+    </span>
+  </h2>
+  <div class="report-meta"><span id="reportTitle"></span></div>
+  <div id="reportBody" class="report-md"></div>
+</section>
+
 <section>
   <h2>每日明细
     <span class="seg" id="daySeg">
       <button data-d="7">7 天</button>
       <button data-d="30" class="on">30 天</button>
       <button data-d="90">90 天</button>
+      <button data-d="3650" title="回看全部归档历史（需启用历史持久化，未启用时与 365 天等价）">全部（归档）</button>
     </span>
     <span class="seg">
       <button id="exportDetailCsv" title="导出每日明细 CSV">导出 CSV</button>

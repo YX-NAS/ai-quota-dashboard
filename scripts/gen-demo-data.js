@@ -90,7 +90,8 @@ const cnyOf = p => {
   const t = DEFAULT_PRICING[p.model];
   if (!t) throw new Error('演示画像里有未收录模型: ' + p.model);
   const cached = Math.min(p.cache, p.in);
-  return (p.in - cached) / 1e6 * t.in + cached / 1e6 * (t.cacheRead ?? t.in) + p.out / 1e6 * t.out;
+  // 思考 token 按输出价计（与采集器行级归一口径一致）
+  return (p.in - cached) / 1e6 * t.in + cached / 1e6 * (t.cacheRead ?? t.in) + (p.out + (p.think || 0)) / 1e6 * t.out;
 };
 const tsBetween = (from, to) => from + rnd() * (to - from);
 const pick = arr => arr[Math.floor(rnd() * arr.length)];
@@ -195,7 +196,8 @@ for (let i = 0; i < clDays.length; i += 3) {
   const lines = clDays.slice(i, i + 3).flatMap(day => clByDay[day].map(r => JSON.stringify({
     timestamp: r.ts,
     message: { id: r.id, model: r.model, usage: {
-      input_tokens: r.in, output_tokens: r.out,
+      // Anthropic 语义：output_tokens 已含思考，thinking_tokens 是其中的子集明细
+      input_tokens: r.in, output_tokens: r.out + r.think,
       cache_read_input_tokens: r.cache, cache_creation_input_tokens: 0,
       output_tokens_details: { thinking_tokens: r.think },
     } },
@@ -216,7 +218,7 @@ fs.writeFileSync(path.join(wbDir, 'chats.jsonl'),
 // ---------- 汇总核对 ----------
 const tsMs = r => typeof r.ts === 'number' ? (r.ts > 1e11 ? r.ts : r.ts * 1000) : Date.parse(r.ts);
 const dayKeyOf = r => bjDay(tsMs(r)); // bjDay 内部已 +8h 折算北京时间
-const eqCny = r => cnyOf({ model: r.model, in: r.in, cache: r.cache, out: r.out });
+const eqCny = r => cnyOf({ model: r.model, in: r.in, cache: r.cache, out: r.out, think: r.think || 0 });
 const mon = bjDay(now).slice(0, 7);
 const sum = {};
 for (const [k, list] of [['zcode', rows.zcode], ['claudeCode', rows.claudeCode], ['workbuddy', rows.workbuddy]]) {

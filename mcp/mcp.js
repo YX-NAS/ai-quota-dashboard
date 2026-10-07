@@ -2,7 +2,7 @@
 'use strict';
 // AI 用量看板 MCP Server（stdio JSON-RPC 2.0，零依赖）
 // 供 ZCode / WorkBuddy / ChatGPT(Codex) / Claude Code 等任意 MCP 客户端使用
-// 也支持 CLI 模式：node mcp.js [summary|today|quota|models|tool:zcode:7]
+// 也支持 CLI 模式：node mcp.js [summary|today|quota|models|report week|month [offset]|tool:zcode:7]
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
@@ -10,6 +10,8 @@ const { version: VERSION } = require(path.join(ROOT, 'package.json'));
 const plansStore = require(path.join(ROOT, 'server', 'lib', 'plans'));
 const { makePricer } = require(path.join(ROOT, 'server', 'lib', 'pricing'));
 const { aggregate, compareYesterday } = require(path.join(ROOT, 'server', 'lib', 'store'));
+const history = require(path.join(ROOT, 'server', 'lib', 'history'));
+const { buildReport } = require(path.join(ROOT, 'server', 'lib', 'report'));
 const zcode = require(path.join(ROOT, 'server', 'collectors', 'zcode'));
 const ccswitch = require(path.join(ROOT, 'server', 'collectors', 'ccswitch'));
 const workbuddy = require(path.join(ROOT, 'server', 'collectors', 'workbuddy'));
@@ -27,10 +29,24 @@ async function getSnapshot() {
   const pricer = makePricer(plans);
   const [zc, cc, wb, clc] = [zcode.collect(), ccswitch.collect(), workbuddy.collect(), claudecode.collect()];
   const rows = [...zc.rows, ...cc.rows, ...wb.rows, ...clc.rows].sort((a, b) => a.ts - b.ts);
+  const agg = aggregate(rows, pricer);
+  // 与 server/index.js buildSnapshot 同口径：聚合落归档 + 归档补缺合并，
+  // 保证 MCP 报表与 web/API 数字一致（原始日志轮转清理后历史不丢）。
+  // 归档库不可用（AI_QUOTA_HISTORY=0 / 坏库）时沿用 raw，不阻塞 MCP 响应。
+  try {
+    if (history.syncFromAgg(agg)) {
+      const merged = history.mergeArchived(agg.daily, agg.models, pricer);
+      if (merged) {
+        agg.daily = merged.daily;
+        agg.dailyKeys = merged.dailyKeys;
+        agg.models = merged.models;
+      }
+    }
+  } catch { /* 归档读写失败：降级 raw 口径 */ }
   snapshotCache = {
     builtAt: Date.now(),
     plans,
-    agg: aggregate(rows, pricer),
+    agg,
     cmp: compareYesterday(rows, pricer),
     rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length },
   };
@@ -76,6 +92,17 @@ const TOOLS_DEF = [
     name: 'ai_usage_models',
     description: '按模型维度列出各工具的用量与费用（当前全部数据范围）。',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'ai_usage_report',
+    description: '生成 AI 用量周报/月报（Markdown 文本）：周期起止与生成时间、总成本（等价口径）/请求数/token 及环比上期、工具榜、模型榜 Top5、最贵的一天、预算达成率（配置了 dailyGoal 或工具月额度时）。周 = 北京时间 ISO 周（周一起），月 = 北京自然月。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['week', 'month'], description: '报表周期：week（周报）或 month（月报），默认 week', default: 'week' },
+        offset: { type: 'number', description: '往回第几期：0 = 本期（默认），1 = 上一期，2 = 上上期…', default: 0 },
+      },
+    },
   },
   {
     name: 'ai_quota_windows',
@@ -204,6 +231,14 @@ async function callTool(name, args) {
     return { text: lines.join('\n') };
   }
 
+  if (name === 'ai_usage_report') {
+    // 周/月报：复用快照的 plans + agg，纯函数出 Markdown（含环比、工具榜、模型榜、预算节）
+    const type = args.type === 'month' ? 'month' : 'week';
+    const offset = Math.max(0, Math.min(type === 'month' ? 120 : 520, Math.floor(Number(args.offset) || 0)));
+    const r = buildReport(agg, plans, { type, offset });
+    return { text: r.markdown };
+  }
+
   if (name === 'ai_quota_windows') {
     const q = await getQuotas();
     const lines = ['套餐实时额度：'];
@@ -276,19 +311,23 @@ async function handleRpc(msg) {
 }
 
 function main() {
-  // CLI 模式：node mcp.js [summary|today|quota|models|tool:zcode:7] [days]
+  // CLI 模式：node mcp.js [summary|today|quota|models|report|tool:zcode:7] [days | week|month [offset]]
   const arg = process.argv[2];
   if (arg) {
     const daysArg = Number(process.argv[3]); // summary/models 支持天数参数
     const map = { summary: 'ai_usage_summary', today: 'ai_usage_today', models: 'ai_usage_models', quota: 'ai_quota_windows' };
     let name = map[arg], a = {};
-    if (!name && arg.startsWith('tool:')) {
+    if (!name && arg === 'report') {
+      // 周报/月报：node mcp.js report week|month [offset]
+      name = 'ai_usage_report';
+      a = { type: process.argv[3] === 'month' ? 'month' : 'week', offset: Number(process.argv[4]) || 0 };
+    } else if (!name && arg.startsWith('tool:')) {
       const [tool, days] = arg.slice(5).split(':');
       name = 'ai_usage_tool'; a = { tool, days: days ? Number(days) : 7 };
     } else if (name && Number.isFinite(daysArg) && daysArg > 0) {
       a = { days: daysArg };
     }
-    if (!name) { console.error('用法: node mcp.js [summary|today|quota|models|tool:zcode:7] [days]'); process.exit(1); }
+    if (!name) { console.error('用法: node mcp.js [summary|today|quota|models|report week|month [offset]|tool:zcode:7] [days]'); process.exit(1); }
     callTool(name, a).then(r => { console.log(r.text); process.exit(0); }, e => { console.error(e.message); process.exit(1); });
     return;
   }
