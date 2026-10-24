@@ -298,6 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var goalPct = 0.0
     var refreshing = false // 刷新进行中：状态栏显示 ⚡ … 占位
     var fetchGen = 0 // 刷新代际：新刷新开始 +1，迟到回调代际不匹配即丢弃
+    var hiddenWarned = false // 图标被挤出屏幕的提醒只发一次，重新可见后允许再次提醒
+    var serviceFailWarned = false // 服务失联提醒只发一次，恢复后重置（图标不可见时通知是唯一触达渠道）
+    var recoveryAttempts = 0 // 服务自愈重试计数：失联后每 5s 一刷，超过上限视为自愈失败
 
     let toolNames: [String: String] = [
         "codex": "ChatGPT·Codex", "claudeDesktop": "Claude Desktop",
@@ -318,6 +321,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh(nil)
         }
+        // 刘海屏菜单栏图标过多时，后注册的状态图标会被整块移出屏幕（isVisible 仍为 true），
+        // 用户看不到任何变化会以为 app 没启动——延时等菜单栏布局稳定后自查，被隐藏就发通知说明
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.checkStatusItemVisibility()
+        }
+    }
+
+    // 图标是否真实显示在屏幕上：被挤出的 NSStatusItem 的 window frame 不与主屏相交
+    func statusItemOnScreen() -> Bool {
+        guard let win = statusItem.button?.window else { return false }
+        return win.frame.width > 1 && (NSScreen.main?.frame.intersects(win.frame) ?? false)
+    }
+    func checkStatusItemVisibility() {
+        if statusItemOnScreen() {
+            hiddenWarned = false
+            return
+        }
+        guard !hiddenWarned else { return }
+        hiddenWarned = true
+        notifyOSX("⚡ AI 用量已在运行，但图标被隐藏",
+                  "菜单栏图标已满，系统把 ⚡ 图标挤出了屏幕。请到 系统设置 → 控制中心 关闭部分菜单栏图标（如屏幕镜像、Siri），腾出空间后重新打开 AI 用量。")
+    }
+
+    // 服务失联时给出可操作的指引（start-all.sh 是三件套的标准启动方式）
+    func warnServiceDownOnce() {
+        guard !serviceFailWarned else { return }
+        serviceFailWarned = true
+        notifyOSX("⚡ 看板服务未响应",
+                  "已尝试自动启动服务但约 90 秒内未就绪。请在仓库目录运行 ./start-all.sh 检查（网页端 localhost:\(serverPort()) 同样依赖它）。")
+    }
+
+    // 服务自愈：取数失败时自动拉起 node 服务（与 start-all.sh 同款命令、幂等），之后每 5s 密集重试。
+    // 服务冷启动约 30s，重试窗口给到 90s；仍失败则通知用户手动处理，避免每次双击 app 都要记得先跑脚本。
+    func recoverFromServiceDown() {
+        if recoveryAttempts == 0 {
+            let repoRoot = ((Bundle.main.bundlePath as NSString).appendingPathComponent("../..") as NSString).standardizingPath
+            // login shell（-l）拿用户 PATH 里的 node（GUI 进程默认 PATH 不含 homebrew）；pgrep 保证不重复拉起
+            let script = "pgrep -f 'server/index.js' >/dev/null && exit 0; cd '\(repoRoot)' && nohup node server/index.js > /tmp/ai-quota-server.log 2>&1 &"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", script]
+            try? p.run()
+            NSLog("AIQuota 服务失联，已自动拉起 node 服务 (%@)", repoRoot)
+        }
+        guard recoveryAttempts < 18 else {
+            warnServiceDownOnce()
+            return
+        }
+        recoveryAttempts += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self, !self.lastOK else { return }
+            self.refresh(nil)
+        }
     }
 
     @objc func refresh(_ sender: Any?) {
@@ -335,6 +391,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.toolRows = []
                 self.todayTotal = (0, 0, 0)
                 self.updateTitle()
+                self.checkStatusItemVisibility()
+                self.recoverFromServiceDown()
+                NSLog("AIQuota refresh fail: %@", lastFetchError ?? "?")
                 return
             }
             self.lastOK = true
@@ -369,6 +428,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.updateTitle()
                 self.rebuildMenu()
+                self.checkStatusItemVisibility()
+                self.recoveryAttempts = 0
+                self.serviceFailWarned = false
+                NSLog("AIQuota refresh ok req=%d cny=%.2f", self.todayTotal.req, self.todayTotal.cny)
             }
         }
     }
@@ -429,7 +492,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         if toolRows.isEmpty {
-            infoItem(lastOK ? "今天还没有请求" : ("获取失败: " + (lastFetchError ?? "?")))
+            if lastOK {
+                infoItem("今天还没有请求")
+            } else {
+                infoItem("获取失败: " + (lastFetchError ?? "?"), color: c.tierHigh)
+                infoItem("看板服务未启动？在仓库目录运行 ./start-all.sh", color: c.tierHigh, mono: false)
+            }
         } else {
             // 对齐的明细行：工具名带各自品牌色，金额白色加粗
             for (name, req, tok, cny) in toolRows {
