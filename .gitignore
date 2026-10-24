@@ -16,5 +16,8 @@ tmp/
 menubar/AIQuota.app/
 desktop/AIQuotaWidget.app/
 
+# 启动器构建产物（scripts/make-launcher.sh 随时重新生成）
+dist/
+
 # ZCode 客户端自动生成（工具工件，不入库）
 .zcodeignore

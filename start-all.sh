@@ -16,14 +16,15 @@ if [ -f "$HOME/.codex/auth.json" ]; then
   python3 "$DIR/scripts/sync-chatgpt-token.py" 2>/dev/null || echo "token 同步跳过（auth.json 不可读，沿用快照）"
 fi
 
-# 2) 看板服务
-if ! pgrep -f "server/index.js" > /dev/null; then
+# 2) 看板服务（HTTP 探活判断，比 pgrep 可靠：进程僵死/退出中也算未运行）
+PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo 7788)"
+if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:${PORT_NOW}/api/summary"; then
+  echo "看板服务已在运行"
+else
   echo "启动看板服务..."
   nohup "$NODE" "$DIR/server/index.js" > /tmp/ai-quota-server.log 2>&1 &
   sleep 2
   curl -s --max-time 3 -o /dev/null -w "服务状态: HTTP %{http_code}（冷启动约需 30s）\n" http://127.0.0.1:7788/
-else
-  echo "看板服务已在运行"
 fi
 
 # 3) 菜单栏应用（可选，仅 macOS 且已编译）

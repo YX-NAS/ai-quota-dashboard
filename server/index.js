@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const plansStore = require('./lib/plans');
 const { makePricer, DEFAULT_PRICING } = require('./lib/pricing');
+const priceSource = require('./lib/price-source');
 const { aggregate, compareYesterday } = require('./lib/store');
 const history = require('./lib/history');
 const alerts = require('./lib/alerts');
@@ -184,6 +185,40 @@ const requestHandler = async (req, res) => {
       plansStore.save(plansStore.applyPlansUpdate(plansStore.load(), body));
       await ensureFresh(true); // 立即按新配置重算
       return sendJson(res, 200, { ok: true });
+    }
+
+    // 在线单价更新：POST { url, apply }。apply=false 只拉取+校验+返回差异预览（不落盘）；
+    // apply=true 把远端价合并进 priceOverrides、记录 priceSource 检查结果并立即重算。
+    // URL 取请求体，缺省回退已存配置；协议/大小/重定向限制在 price-source.fetchPrices
+    if (url.pathname === '/api/prices/update' && req.method === 'POST') {
+      const ct = String(req.headers['content-type'] || '');
+      if (!ct.includes('application/json')) return sendJson(res, 415, { error: 'Content-Type 必须为 application/json' });
+      let raw, body;
+      try { raw = await readBody(req); } catch { return sendJson(res, 413, { error: '请求体过大' }); }
+      try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { error: 'JSON 解析失败' }); }
+      const stored = (plansStore.load().priceSource || {}).url || '';
+      const srcUrl = String((body && body.url) || stored || '').trim();
+      if (!srcUrl) return sendJson(res, 400, { error: '未提供单价源 URL' });
+      const fr = await priceSource.fetchPrices(srcUrl);
+      if (!fr.ok) return sendJson(res, 502, { error: '拉取失败：' + fr.error });
+      const parsed = priceSource.parsePriceFile(fr.text);
+      if (!parsed.ok) return sendJson(res, 422, { error: '文件校验失败：' + parsed.error });
+      const plans = plansStore.load();
+      const diff = priceSource.diffPrices(makePricer(plans).table, parsed.models);
+      if (body && body.apply) {
+        const next = priceSource.mergeRemoteOverrides(plans, parsed.models);
+        next.priceSource = {
+          url: srcUrl,
+          lastCheck: new Date().toISOString(),
+          lastResult: 'ok',
+          updated: parsed.meta.updated,
+          models: Object.keys(parsed.models).length,
+        };
+        plansStore.save(next);
+        await ensureFresh(true); // 立即按新单价重算历史等价成本
+        return sendJson(res, 200, { ok: true, applied: true, url: srcUrl, meta: parsed.meta, diff });
+      }
+      return sendJson(res, 200, { ok: true, applied: false, url: srcUrl, meta: parsed.meta, diff });
     }
 
     // 静态文件

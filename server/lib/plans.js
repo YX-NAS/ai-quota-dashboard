@@ -18,6 +18,10 @@ const TEMPLATE = {
     workbuddy:     { label: 'WorkBuddy',       plan: null, cnyPerDay: null, cnyPerMonth: null },
   },
   priceOverrides: {},
+  // 工具卡片区显隐（网页设置面板「卡片显示」勾选；仅影响卡片渲染，表格/趋势图/明细数据不变）
+  hiddenCards: [],
+  // 在线单价源：url 用户可改（仅 http/https）；lastCheck/lastResult/updated/models 为服务端记录的最近一次检查结果
+  priceSource: { url: '', lastCheck: null, lastResult: '', updated: '', models: 0 },
   // 当日目标成本（等价成本 ¥）：网页横幅 / 菜单栏 / 桌面卡片的预算进度条（0 = 关闭目标）
   dailyGoal: { cny: 200 },
   // 套餐实时额度的手动 key 配置：非空优先，留空回退各采集器的自动发现
@@ -132,6 +136,19 @@ function applyPlansUpdate(current, body) {
       if (Object.keys(e).length) po[m] = e;
     }
     next.priceOverrides = po;
+  }
+  // 卡片显隐：合法工具 key 白名单 + 去重；非数组整体忽略（保留原值）
+  if (body && Array.isArray(body.hiddenCards)) {
+    const valid = new Set(Object.keys(TEMPLATE.plans));
+    next.hiddenCards = [...new Set(body.hiddenCards.filter(k => valid.has(k)))];
+  }
+  // 在线单价源：只接受 url 字段（空串 = 清除；必须 http/https）；检查结果字段由 /api/prices/update 服务端维护
+  if (body && body.priceSource && typeof body.priceSource === 'object') {
+    const v = String(body.priceSource.url ?? '').trim();
+    const cur = next.priceSource || JSON.parse(JSON.stringify(TEMPLATE.priceSource));
+    if (v === '') cur.url = '';
+    else if (isHttpUrl(v)) cur.url = v;
+    next.priceSource = cur;
   }
   // 实时额度 keys：沿用既有合并语义
   if (body && body.quotaKeys) next.quotaKeys = applyQuotaKeysUpdate(next, body.quotaKeys);

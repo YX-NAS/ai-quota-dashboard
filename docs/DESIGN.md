@@ -80,7 +80,8 @@ ai-quota-dashboard/
 
 ## 5. 计价
 
-- 内置单价表（元/百万 token，2026-09 采集）：glm-5.3 / glm-5.2 = 8/28，glm-5.3-flash = 0.8/2.8（缓存 0.23），MiniMax-M3 = 4.2/16.8（缓存 0.845），MiniMax-M2.7 = 2.1/8.4，GLM-5.3-Flash（ZCode 同价 flash）
+- 内置单价表（元/百万 token，2026-10-23 官方定价页采集）：GLM-5.3 / 5.2 = 8/28（缓存命中 2），GLM-5.3-Flash = 0.8/2.8（缓存 0.23），GLM-5.3-FlashX = 2/7（0.57）；MiniMax-M3 = 2.1/8.4（官方永久 5 折，缓存 0.42），M3.1-Flash = 1/4（0.1），M2.7 = 2.1/8.4；DeepSeek 分时计价取空闲/高峰均值：v4-pro = 6.75/20.25（0.23）、v4-flash = 1.5/6（0.03）
+- **在线更新单价**：设置面板「在线更新单价」区从价格源 JSON 拉最新价（默认 `config/prices.source.json` 的 jsDelivr 镜像），先预览差异再应用；应用 = 写入 `priceOverrides` + 立即重算历史。拉取仅 http/https、拒重定向、10s 超时、256KB 上限（`server/lib/price-source.js`，API `POST /api/prices/update {url, apply}`）
 - Codex：直接用库里的 `total_cost_usd`，不做二次估算
 - 未收录模型：只计 token，不计费，页面标注「无单价」
 - 展示货币：元；Codex 的 USD 乘汇率（默认 7.2，plans.json 可配）
@@ -100,6 +101,7 @@ ai-quota-dashboard/
 | `GET /api/report?type=week\|month&offset=N` | 周报/月报（title + markdown + data；offset 上限 week 520 / month 120，非法值钳回本期） |
 | `GET /api/refresh` | 强制重扫 |
 | `GET /api/plans` / `POST /api/plans` | 读取/保存额度配置（含 `quotaKeys`：三家实时额度的手动 key；GET 对机密字段脱敏，POST 按「空串清除 / 脱敏回显保留 / 其余为新值」合并，逻辑在 `server/lib/plans.js` 的 `applyQuotaKeysUpdate`） |
+| `POST /api/prices/update` | 在线单价更新：`{url, apply}`；apply=false 拉取+校验+差异预览（不落盘），apply=true 合并进 priceOverrides 并立即重算 |
 | `GET /web/*` | 静态文件 |
 
 ## 8. 页面设计（暗色主题，跟随系统）

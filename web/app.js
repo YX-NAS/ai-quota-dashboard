@@ -1,11 +1,12 @@
 'use strict';
 // 看板前端：渲染 /api/summary
+// 工具识别色（与趋势图堆叠色一致，卡片头部圆点同源）
 const TOOLS = [
-  { key: 'codex', name: 'ChatGPT · Codex', planName: 'ChatGPT 订阅' },
-  { key: 'claudeDesktop', name: 'Claude Desktop' },
-  { key: 'claudeCode', name: 'Claude Code', sub: true, planName: 'cc-switch 路由（按模型计价）' },
-  { key: 'zcode', name: 'ZCode', sub: true, planName: '智谱 Coding Plan' },
-  { key: 'workbuddy', name: 'WorkBuddy', sub: true, planName: '订阅套餐（自定义模型）' },
+  { key: 'codex', name: 'ChatGPT · Codex', planName: 'ChatGPT 订阅', color: '#8aadf4' },
+  { key: 'claudeDesktop', name: 'Claude Desktop', color: '#c6a0f6' },
+  { key: 'claudeCode', name: 'Claude Code', sub: true, planName: 'cc-switch 路由（按模型计价）', color: '#ed8796' },
+  { key: 'zcode', name: 'ZCode', sub: true, planName: '智谱 Coding Plan', color: '#a6da95' },
+  { key: 'workbuddy', name: 'WorkBuddy', sub: true, planName: '订阅套餐（自定义模型）', color: '#eed49f' },
 ];
 const fmt = n => n == null ? '—' : n.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
 const fmtCny = n => n == null ? '—' : '¥' + n.toLocaleString('zh-CN', { maximumFractionDigits: 2 });
@@ -65,7 +66,7 @@ function quotaBar(label, used, resetMs) {
   const cls = used > 85 ? 'over' : used > 60 ? 'warn' : '';
   const reset = resetMs ? ` · 剩 ${Math.floor(resetMs / 3600e3)}h${Math.floor(resetMs % 3600e3 / 60e3)}m` : '';
   return `<div class="bar"><i class="${cls}" style="width:${Math.min(used, 100)}%"></i></div>
-    <div class="quota-line"><span>${label} 已用 ${used}%</span><span class="mut">${used > 85 ? '⚠️ ' : ''}剩 ${Math.round((100 - used) * 10) / 10}%${reset}</span></div>`;
+    <div class="quota-line"><span>${label} 已用 ${used}%</span><span class="mut">剩 ${Math.round((100 - used) * 10) / 10}%${reset}</span></div>`;
 }
 // 额度卡降级策略：未配置类原因（未找到/未配置/无凭证）且从未成功 → 整卡不渲染；
 // 曾成功过之后失败 → 显示失败态；其他失败原因（超时/接口异常）→ 也提示失败
@@ -164,13 +165,13 @@ function toolDay(day, key) { return (snap.agg.daily[day] || {})[key] || null; }
 // ---------- 当日目标成本（预算横幅） ----------
 // 进度分档提示语：随预算消耗升温，用完转超支预警
 function goalTier(pct) {
-  if (pct <= 0) return { msg: '新的一天，预算已就位，按需使用 🚀', cls: 'g0' };
-  if (pct < 25) return { msg: '预算充裕，安心干活 💭', cls: 'g25' };
-  if (pct < 50) return { msg: '消耗平稳，余量尚多 ✨', cls: 'g25' };
-  if (pct < 75) return { msg: '已用过半，留意消耗节奏 🌀', cls: 'g50' };
-  if (pct < 100) return { msg: '预算将尽，要紧的任务优先安排 ⚠️', cls: 'g75' };
-  if (pct < 150) return { msg: '当日目标成本已用完 💸 再跑就要超支了', cls: 'g100' };
-  return { msg: '已大幅超出当日目标成本 🚨 记得收敛或上调目标', cls: 'g100' };
+  if (pct <= 0) return { msg: '新的一天，预算已就位', cls: 'g0' };
+  if (pct < 25) return { msg: '预算充裕，安心使用', cls: 'g25' };
+  if (pct < 50) return { msg: '消耗平稳，余量尚多', cls: 'g25' };
+  if (pct < 75) return { msg: '已用过半，留意消耗节奏', cls: 'g50' };
+  if (pct < 100) return { msg: '预算将尽，优先安排要紧任务', cls: 'g75' };
+  if (pct < 150) return { msg: '当日目标成本已用完，再跑就要超支了', cls: 'g100' };
+  return { msg: '已大幅超出当日目标成本，建议收敛或上调目标', cls: 'g100' };
 }
 // 按北京时间今日已过时长外推的预算耗尽预测
 function goalEta(spent, target) {
@@ -180,7 +181,7 @@ function goalEta(spent, target) {
   if (bjMsToday < 20 * 60e3) return '';           // 刚过零点速率无意义
   const rate = spent / bjMsToday;                 // ¥/ms
   const etaMs = (target - spent) / rate;
-  if (etaMs + bjMsToday > 86400e3) return '按当前节奏今天用不完预算 👍';
+  if (etaMs + bjMsToday > 86400e3) return '按当前节奏今天用不完预算';
   const eta = new Date(Date.now() + etaMs + 8 * 3600e3).toISOString().slice(11, 16);
   return `按当前节奏预计 ${eta} 用完预算`;
 }
@@ -206,11 +207,11 @@ function renderGoalBanner() {
   box.innerHTML = `
     <div class="goal ${tier.cls}">
       <div class="goal-head">
-        <span class="goal-title">🎯 当日目标成本</span>
+        <span class="goal-title">当日目标成本</span>
         <span class="goal-msg">${tier.msg}</span>
-        <span class="goal-num">${fmtCny(spent)} / ¥${goal}<span class="goal-pct">${pct >= 100 ? '💸' : pct.toFixed(0) + '%'}</span></span>
+        <span class="goal-num">${fmtCny(spent)} / ¥${goal}<span class="goal-pct">${pct >= 100 ? '已超支' : pct.toFixed(0) + '%'}</span></span>
       </div>
-      <div class="bar goalbar"><i style="width:${Math.min(pct, 100)}%"></i><em style="left:${Math.min(pct, 100)}%">${spent >= goal ? '🚨' : pct >= 75 ? '⚠️' : ''}</em></div>
+      <div class="bar goalbar"><i style="width:${Math.min(pct, 100)}%"></i></div>
       <div class="goal-foot"><span>${left}${cmpPart}${yFullPart}（等价成本口径 · 北京时间）</span><span>${eta}</span></div>
     </div>`;
 }
@@ -361,7 +362,7 @@ function renderCards() {
       ? ` <span class="mut" style="font-size:11px;display:inline-block">· 昨同 ${fmt(yTool.requests)} 次 / ${fmtCny(yTool.cny)}</span>` : '';
 
     return `<div class="card" data-key="${t.key}">
-      <h3>${t.name} ${t.sub ? '<span class="tag sub-pay">套餐</span>' : '<span class="tag">按量</span>'}</h3>
+      <h3><span class="tool-dot" style="background:${t.color}"></span>${t.name} ${t.sub ? '<span class="tag sub-pay">套餐</span>' : '<span class="tag">按量</span>'}</h3>
       <div class="rows">
         ${planLine}
         <div><span class="k">今日</span><span>${fmt(today.requests)} 次 · ${tok(today.inputTokens + today.outputTokens)} tk${yToolPart}</span></div>
@@ -378,14 +379,18 @@ function renderCards() {
   const idleToolsKey = 'aqd:idleToolsExpanded';
   let idleExpanded = false;
   try { idleExpanded = localStorage.getItem(idleToolsKey) === '1'; } catch { /* localStorage 不可用 */ }
-  const idleTools = TOOLS.filter(t => !rowStatOf(t.key));
+  // 卡片显隐：hiddenCards 里的工具整卡不渲染（含未启用折叠区）；数据表/趋势图不受影响
+  const hiddenSet = new Set(snap.plans.hiddenCards || []);
+  const idleTools = TOOLS.filter(t => !rowStatOf(t.key) && !hiddenSet.has(t.key));
   let idleHtml = '';
   if (idleTools.length) {
     idleHtml = `<div class="card idle-toggle" id="idleToggle">另有 ${idleTools.length} 个未启用的工具 <span class="arr">${idleExpanded ? '▾' : '▸'}</span></div>`
       + (idleExpanded ? idleTools.map(buildCard).join('') : '');
   }
+  const hiddenHint = hiddenSet.size
+    ? `<div class="cards-hidden-hint">已隐藏 ${hiddenSet.size} 个工具卡片 · 设置 → 卡片显示 可恢复</div>` : '';
   document.getElementById('cards').innerHTML =
-    TOOLS.filter(t => rowStatOf(t.key)).map(buildCard).join('') + idleHtml;
+    TOOLS.filter(t => rowStatOf(t.key) && !hiddenSet.has(t.key)).map(buildCard).join('') + idleHtml + hiddenHint;
   const tg = document.getElementById('idleToggle');
   if (tg) tg.addEventListener('click', () => {
     try { localStorage.setItem(idleToolsKey, idleExpanded ? '0' : '1'); } catch { /* 忽略 */ }
@@ -471,7 +476,7 @@ function renderChart() {
   const mag = Math.pow(10, Math.floor(Math.log10(rawMax)));
   const maxV = Math.ceil(rawMax / (mag / 2)) * (mag / 2);
   const bw = (W - P.l - P.r) / Math.max(daysList.length, 1);
-  const colors = { codex: '#2dd6f5', claudeDesktop: '#a78bfa', claudeCode: '#f472b6', zcode: '#34d399', workbuddy: '#fbbf24' };
+  const colors = Object.fromEntries(TOOLS.map(t => [t.key, t.color]));
   let bars = '';
   daysList.forEach((d, i) => {
     let y = H - P.b;
@@ -577,6 +582,83 @@ function renderAlertsEditor(p) {
     <input id="sAlertCd" type="number" min="1" step="1" value="${a.cooldownMinutes ?? 60}">`;
 }
 
+// 在线单价更新：默认指向本仓库价格源的 jsDelivr 镜像（GitHub 直连不稳时可换任意 JSON 地址）
+const DEFAULT_PRICE_URL = 'https://cdn.jsdelivr.net/gh/YX-NAS/ai-quota-dashboard@main/config/prices.source.json';
+const PRICE_FIELD_NAMES = { in: '输入', out: '输出', cacheRead: '缓存命中', cacheWrite: '缓存写入' };
+
+function renderPriceOnlineEditor(p) {
+  const ps = p.priceSource || {};
+  const last = ps.lastCheck
+    ? `上次检查 ${new Date(ps.lastCheck).toLocaleString('zh-CN')}${ps.updated ? ' · 源更新于 ' + ps.updated : ''}（${ps.models || 0} 个模型）`
+    : '尚未检查过';
+  return `<hr><div class="qk-hint">在线更新单价 —— 从价格源 JSON 拉取最新模型价（元/百万 token）：先「检查更新」预览差异，确认后「应用更新」写入下方覆盖表（应用后立即按新价重算历史，可随时手改或恢复默认）</div>
+    <label>价格源 URL</label>
+    <input id="sPriceUrl" type="text" value="${ps.url || DEFAULT_PRICE_URL}" placeholder="${DEFAULT_PRICE_URL}" spellcheck="false">
+    <div class="price-src-row">
+      <button type="button" id="priceCheck">检查更新</button>
+      <button type="button" id="priceApply" disabled>应用更新</button>
+      <span class="mut" style="font-size:12px" id="priceLastCheck">${last}</span>
+    </div>
+    <div id="priceCheckResult"></div>`;
+}
+
+// 差异结果渲染：价格变化逐行列出（模型 / 字段 / 旧 → 新），新增模型单独一行
+function renderPriceDiff(j, applied) {
+  const box = document.getElementById('priceCheckResult');
+  const d = j.diff || { changes: [], added: [], unchanged: 0 };
+  const fmtP = v => v == null ? '—' : String(v);
+  if (!d.changes.length && !d.added.length) {
+    box.innerHTML = `<div class="price-diff-ok">已是最新：${d.unchanged} 个模型与价格源一致${j.meta && j.meta.updated ? '（源更新于 ' + j.meta.updated + '）' : ''}</div>`;
+    return;
+  }
+  const rows = d.changes.map(c => `
+    <div class="price-diff">
+      <span class="pm" title="${c.model}">${c.model}</span>
+      <span class="mut">${PRICE_FIELD_NAMES[c.field] || c.field}</span>
+      <span class="mut">${fmtP(c.from)} → <b class="price-new">${fmtP(c.to)}</b></span>
+    </div>`).join('');
+  const addedHtml = d.added.length ? `
+    <div class="price-diff">
+      <span class="pm">新增模型</span>
+      <span class="mut" style="grid-column: span 2">${d.added.join('、')}</span>
+    </div>` : '';
+  box.innerHTML = `
+    ${applied ? '<div class="price-diff-ok">已应用，等价成本正按新单价重算</div>' : ''}
+    <div class="price-diff-head">${d.changes.length} 处价格变化 · ${d.added.length} 个新增模型 · ${d.unchanged} 个一致</div>
+    ${rows}${addedHtml}`;
+}
+
+// 检查 / 应用：apply=false 只预览不落盘；apply=true 落盘 + 立即重算 + 刷新设置面板
+async function runPriceUpdate(apply) {
+  const checkBtn = document.getElementById('priceCheck');
+  const applyBtn = document.getElementById('priceApply');
+  const box = document.getElementById('priceCheckResult');
+  const srcUrl = (document.getElementById('sPriceUrl') || {}).value || '';
+  checkBtn.disabled = true; applyBtn.disabled = true;
+  box.innerHTML = '<span class="mut" style="font-size:12px">拉取中…</span>';
+  try {
+    const r = await fetch('/api/prices/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: srcUrl.trim(), apply }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((j && j.error) || 'HTTP ' + r.status);
+    if (apply) {
+      toast('单价已更新，正在重算');
+      load();
+      const pr = await fetch('/api/plans');       // 覆盖表 / 检查记录已变：整体重渲染设置面板
+      renderSettingsBody(await pr.json());
+    } else {
+      renderPriceDiff(j, false);
+      applyBtn.disabled = false;                  // 预览成功才允许应用
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="settings-err">更新失败：${e.message}</div>`;
+  } finally {
+    checkBtn.disabled = false;
+  }
+}
+
 // 设置面板
 const dlg = document.getElementById('settingsDlg');
 const QUOTA_KEY_FIELDS = [
@@ -586,9 +668,8 @@ const QUOTA_KEY_FIELDS = [
   ['minimax', 'apiKey', 'MiniMax · API Key（留空 = 从 WorkBuddy models.json 读取）'],
   ['chatgpt', 'accessToken', 'ChatGPT · Access Token（一般留空，自动读 codex 登录；手动填的过期需自行更新）'],
 ];
-document.getElementById('settingsBtn').onclick = async () => {
-  document.getElementById('settingsErr').hidden = true; // 打开时清掉上次错误
-  const r = await fetch('/api/plans'); const p = await r.json();
+// 面板渲染与事件绑定合并成一个函数：单价在线应用后要整体重渲染（覆盖表已变）
+function renderSettingsBody(p) {
   const qk = p.quotaKeys || {};
   document.getElementById('settingsBody').innerHTML =
     `<label>USD → CNY 汇率</label><input id="sFx" type="number" step="0.01" value="${p.usdCnyRate}">` +
@@ -597,21 +678,32 @@ document.getElementById('settingsBtn').onclick = async () => {
       `<label>${v.label} · 月额度（等价 ¥，留空 = 未配置）</label>
        <input data-plan="${k}" type="number" step="0.01" value="${v.cnyPerMonth ?? ''}" placeholder="未配置">`
     ).join('') +
+    `<hr><div class="qk-hint">卡片显示 —— 取消勾选的工具有卡片区整卡隐藏（表格 / 趋势图 / 每日明细仍保留全部数据）</div>
+     <div class="hide-grid">` +
+    TOOLS.map(t => `<label class="ck"><input data-hide="${t.key}" type="checkbox" ${(p.hiddenCards || []).includes(t.key) ? '' : 'checked'}> ${t.name}</label>`).join('') +
+    `</div>` +
     `<hr><div class="qk-hint">套餐实时额度 Key —— 已配置的显示为脱敏（如 <code>88b9…GXlN</code>），不改即保留；清空 = 回退自动发现；输入新值 = 覆盖</div>` +
     QUOTA_KEY_FIELDS.map(([t, f, label]) =>
       `<label>${label}</label>
        <input data-qk-tool="${t}" data-qk-field="${f}" type="text" value="${(qk[t] || {})[f] || ''}" placeholder="未配置 · 自动发现" spellcheck="false">`
     ).join('') +
     renderAlertsEditor(p) +
+    renderPriceOnlineEditor(p) +
     renderPriceEditor(p);
-  dlg.showModal();
   document.getElementById('priceReset').onclick = () => {
     document.querySelectorAll('[data-price]').forEach(el => { el.value = ''; });
   };
-  // 切换推送通道时同步地址提示
   document.getElementById('sAlertType').onchange = e => {
     document.getElementById('sAlertHint').textContent = ALERT_WEBHOOK_HINTS[e.target.value] || '';
   };
+  document.getElementById('priceCheck').onclick = () => runPriceUpdate(false);
+  document.getElementById('priceApply').onclick = () => runPriceUpdate(true);
+}
+document.getElementById('settingsBtn').onclick = async () => {
+  document.getElementById('settingsErr').hidden = true; // 打开时清掉上次错误
+  const r = await fetch('/api/plans'); const p = await r.json();
+  renderSettingsBody(p);
+  dlg.showModal();
 };
 document.getElementById('settingsCancel').onclick = () => dlg.close();
 document.getElementById('settingsX').onclick = () => dlg.close();
@@ -645,10 +737,18 @@ document.getElementById('settingsSave').onclick = async () => {
     },
     cooldownMinutes: Number(document.getElementById('sAlertCd').value),
   };
+  // 卡片显隐：未勾选的工具进 hiddenCards
+  const hiddenCards = [];
+  document.querySelectorAll('[data-hide]').forEach(el => { if (!el.checked) hiddenCards.push(el.dataset.hide); });
   try {
     const r = await fetch('/api/plans', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ usdCnyRate: Number(document.getElementById('sFx').value), dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 }, plans, quotaKeys, priceOverrides, alerts }),
+      body: JSON.stringify({
+        usdCnyRate: Number(document.getElementById('sFx').value),
+        dailyGoal: { cny: Number(document.getElementById('sGoal').value) || 0 },
+        plans, quotaKeys, priceOverrides, alerts, hiddenCards,
+        priceSource: { url: (document.getElementById('sPriceUrl') || {}).value?.trim() || '' },
+      }),
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
@@ -748,7 +848,7 @@ function renderReport() {
   if (reportState.error) {
     titleEl.textContent = '';
     // 与顶部错误横幅同款风格：占位文案 + 重试
-    box.innerHTML = '<div class="err-banner"><span>⚠️ 报表暂不可用（/api/report 未响应或尚未接线）</span><button id="reportRetry" class="seg">重试</button></div>';
+    box.innerHTML = '<div class="err-banner"><span>报表暂不可用（/api/report 未响应或尚未接线）</span><button id="reportRetry" class="seg">重试</button></div>';
     const b = document.getElementById('reportRetry');
     if (b) b.onclick = loadReport;
     return;
@@ -889,11 +989,11 @@ function renderOnboard() {
   const total = Object.values(snap.rowStats || {}).reduce((x, y) => x + y, 0);
   if (total > 0 || localStorage.getItem('aqd:onboardDismissed')) { box.innerHTML = ''; return; }
   box.innerHTML = `
-    <div class="glass" style="padding:14px 18px;margin:12px 0;border-radius:16px">
-      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-        <b style="background:var(--grad-cool);-webkit-background-clip:text;background-clip:text;color:transparent">👋 第一次使用</b>
-        <span class="mut" style="font-size:13px;flex:1">看板读取的是本机工具的使用记录：ZCode · Claude Code · Claude Desktop · ChatGPT·Codex(cc-switch) · WorkBuddy。装好并用上任意一个，数据 1 分钟内自动出现；额度卡需要对应套餐的凭证（设置里可配）。</span>
-        <button id="onboardOk" class="seg" style="margin:0">知道了</button>
+    <div class="glass onboard">
+      <div class="onboard-head">
+        <b class="onboard-title">第一次使用</b>
+        <span class="mut onboard-msg">看板读取的是本机工具的使用记录：ZCode · Claude Code · Claude Desktop · ChatGPT·Codex(cc-switch) · WorkBuddy。装好并用上任意一个，数据 1 分钟内自动出现；额度卡需要对应套餐的凭证（设置里可配）。</span>
+        <button id="onboardOk" class="btn">知道了</button>
       </div>
     </div>`;
   document.getElementById('onboardOk').onclick = () => {
@@ -985,36 +1085,8 @@ document.addEventListener('pointercancel', () => {
 enableCardDnD('cards');
 enableCardDnD('quotaCards');
 
-// ---------- 星野背景（canvas，低调闪烁） ----------
-(function starfield() {
-  const cv = document.getElementById('fx');
-  if (!cv) return;
-  const ctx = cv.getContext('2d');
-  let W, H, stars = [];
-  function resize() {
-    W = cv.width = innerWidth; H = cv.height = innerHeight;
-    const n = Math.min(170, Math.floor(W * H / 11000));
-    stars = Array.from({ length: n }, () => ({
-      x: Math.random() * W, y: Math.random() * H,
-      r: Math.random() * 1.2 + 0.3, p: Math.random() * Math.PI * 2,
-      s: 0.3 + Math.random() * 1.1, blue: Math.random() < 0.18,
-    }));
-  }
-  resize();
-  addEventListener('resize', resize);
-  (function draw(t) {
-    ctx.clearRect(0, 0, W, H);
-    for (const st of stars) {
-      ctx.globalAlpha = 0.16 + 0.5 * (0.5 + 0.5 * Math.sin(st.p + t / 1000 * st.s));
-      ctx.fillStyle = st.blue ? '#9fd8ff' : '#e8eeff';
-      ctx.beginPath(); ctx.arc(st.x, st.y, st.r, 0, 7); ctx.fill();
-    }
-    requestAnimationFrame(draw);
-  })(0);
-})();
-
-// 入场动效只播一次：1.6s 后摘除标记，避免 60s 自动刷新时整页闪动
-setTimeout(() => document.body.classList.remove('anim-once'), 1600);
+// 入场动效只播一次：1s 后摘除标记，避免 60s 自动刷新时整页闪动
+setTimeout(() => document.body.classList.remove('anim-once'), 1000);
 
 load();
 loadReport();

@@ -9,16 +9,24 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="anim-once">
-<div class="bg-aurora"></div>
-<div class="bg-grid"></div>
-<canvas id="fx"></canvas>
 <div class="drag-ghost" id="dragGhost"></div>
 
-<h1><span class="logo">🪐</span>AI 工具额度看板 <button id="settingsBtn" class="seg">⚙ 设置</button></h1>
-<div class="sub"><span class="live-dot"></span>数据源：本机 <code>~/.zcode</code> · <code>~/.cc-switch</code> · <code>~/.workbuddy-ai</code> · <code>~/.claude</code> · 只读 · 每 60s 刷新 · <span id="updatedAt"></span> · 卡片可拖拽排序</div>
+<header class="topbar">
+  <div class="brand">
+    <svg class="logo-mark" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".28" stroke-width="3"/>
+      <path d="M 12 3 A 9 9 0 0 1 21 12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <h1>AI 工具额度看板</h1>
+      <div class="sub"><span class="live-dot"></span>数据源：本机 <code>~/.zcode</code> · <code>~/.cc-switch</code> · <code>~/.workbuddy-ai</code> · <code>~/.claude</code> · 只读 · 每 60s 刷新 · <span id="updatedAt"></span> · 卡片可拖拽排序</div>
+    </div>
+  </div>
+  <button id="settingsBtn" class="btn">设置</button>
+</header>
 
 <div id="errBanner" class="err-banner" hidden>
-  <span>⚠️ 看板服务未响应，数据可能已过期</span>
+  <span>看板服务未响应，数据可能已过期</span>
   <button id="retryBtn" class="seg">重试</button>
 </div>
 
@@ -38,7 +46,7 @@
   <h2>模型分类费用（全部历史）
     <span class="seg"><button id="exportModelsCsv" title="导出模型费用表 CSV">导出 CSV</button></span>
   </h2>
-  <div style="overflow-x:auto"><table id="modelTable"></table></div>
+  <div class="table-wrap"><table id="modelTable"></table></div>
 </section>
 
 <section id="chart">
@@ -62,7 +70,7 @@
     </span>
   </h2>
   <div class="report-meta"><span id="reportTitle"></span></div>
-  <div id="reportBody" class="report-md"></div>
+  <div id="reportBody" class="report-md glass"></div>
 </section>
 
 <section>
@@ -78,7 +86,7 @@
       <button id="exportJson" title="导出整份快照 JSON">导出 JSON</button>
     </span>
   </h2>
-  <div style="overflow-x:auto"><table id="detail"></table></div>
+  <div class="table-wrap tall"><table id="detail"></table></div>
 </section>
 
 <dialog id="settingsDlg">

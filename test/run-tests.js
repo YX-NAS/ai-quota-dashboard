@@ -375,6 +375,17 @@ t('合法更新生效：汇率 7.5、目标 100、月额度清空为 null', () =
   assert.equal(next.plans.zcode.cnyPerMonth, null);
   assert.equal(next.dailyGoal.cny, 100);
 });
+t('hiddenCards 卡片显隐：白名单过滤 + 去重；非数组忽略保留原值；空数组 = 全部恢复显示', () => {
+  const cur = { hiddenCards: ['zcode'], plans: {}, priceOverrides: {}, dailyGoal: { cny: 0 } };
+  const next = applyPlansUpdate(cur, {
+    hiddenCards: ['claudeDesktop', 'claudeCode', 'claudeCode', 'bogus-tool', 42],
+  });
+  assert.deepEqual(next.hiddenCards, ['claudeDesktop', 'claudeCode'], '非法 key 剔除、重复去重');
+  const keep = applyPlansUpdate({ hiddenCards: ['zcode'] }, { hiddenCards: 'not-array' });
+  assert.deepEqual(keep.hiddenCards, ['zcode'], '非数组整体忽略');
+  const clear = applyPlansUpdate(cur, { hiddenCards: [] });
+  assert.deepEqual(clear.hiddenCards, [], '空数组 = 全部显示');
+});
 t('priceOverrides 白名单含 cacheWrite：合法保留、非法剔除', () => {
   const next = applyPlansUpdate({ priceOverrides: {} }, {
     priceOverrides: { 'glm-5.3': { cacheWrite: 12, in: -1 }, ghost: { cacheWrite: NaN } },
@@ -1058,6 +1069,54 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     if (st.rows > 0) assert.ok(st.skipped > 0, `同内容第二轮应有指纹跳过（rows=${st.rows}, skipped=${st.skipped}）`);
   });
 
+  console.log('== price-source（在线单价源：解析 / 差异 / 合并） ==');
+  const priceSource = require('../server/lib/price-source');
+  const PS_FILE = JSON.stringify({
+    schema: 'ai-quota-prices/1', updated: '2026-10-23', source: 'test',
+    models: {
+      'glm-5.3': { in: 8, out: 28, cacheRead: 2 },
+      'MiniMax-M3': { in: 2.1, out: 8.4, cacheRead: 0.42 },
+      'brand-new-model': { in: 1, out: 2 },
+      'bad-model': { in: -1, out: 'x' },  // in/out 全非法 → 整行跳过
+      'half-model': { in: 3 },            // 缺 out → 跳过
+    },
+  });
+  {
+    const parsed = priceSource.parsePriceFile(PS_FILE);
+    t('parsePriceFile：合法文件解析、坏行跳过、meta 截取', () => {
+      assert.equal(parsed.ok, true);
+      assert.deepEqual(Object.keys(parsed.models).sort(), ['MiniMax-M3', 'brand-new-model', 'glm-5.3']);
+      assert.equal(parsed.meta.updated, '2026-10-23');
+      assert.equal(parsed.meta.source, 'test');
+    });
+    t('parsePriceFile：非 JSON / 缺 models / 无合法模型 一律拒绝', () => {
+      assert.equal(priceSource.parsePriceFile('not json').ok, false);
+      assert.equal(priceSource.parsePriceFile('{"updated":"x"}').ok, false);
+      assert.equal(priceSource.parsePriceFile('{"models":{"a":{"in":1}}}').ok, false);
+    });
+    t('diffPrices：字段变化逐条列出、新模型单列、一致计数', () => {
+      const eff = { 'glm-5.3': { in: 8, out: 28, cacheRead: 2 }, 'MiniMax-M3': { in: 4.2, out: 16.8, cacheRead: 0.845 } };
+      const d = priceSource.diffPrices(eff, parsed.models);
+      assert.deepEqual(d.added, ['brand-new-model']);
+      assert.equal(d.unchanged, 1, 'glm-5.3 与远端一致');
+      assert.equal(d.changes.filter(c => c.model === 'MiniMax-M3').length, 3, 'in/out/cacheRead 三处变化');
+      assert.deepEqual(d.changes.find(c => c.model === 'MiniMax-M3' && c.field === 'in'),
+        { model: 'MiniMax-M3', field: 'in', from: 4.2, to: 2.1 });
+    });
+    t('mergeRemoteOverrides：同名模型整组替换（以远端为准）、未提及覆盖保留、纯函数', () => {
+      const cur = { priceOverrides: { 'glm-5.3': { in: 9 }, keep: { in: 1, out: 2 } } };
+      const next = priceSource.mergeRemoteOverrides(cur, { 'glm-5.3': { in: 8, out: 28 } });
+      assert.deepEqual(next.priceOverrides['glm-5.3'], { in: 8, out: 28 }, '旧 in:9 被远端整组替换');
+      assert.deepEqual(next.priceOverrides.keep, { in: 1, out: 2 });
+      assert.deepEqual(cur.priceOverrides['glm-5.3'], { in: 9 }, '不改入参');
+    });
+    await ta('fetchPrices：协议白名单拒绝 file:（不触达本机文件）', async () => {
+      const r = await priceSource.fetchPrices('file:///etc/passwd');
+      assert.equal(r.ok, false);
+      assert.ok(r.error.includes('协议'), r.error);
+    });
+  }
+
   console.log('== 集成：HTTP 层（临时端口挂 requestHandler，端口 0 随机） ==');
   const httpJson = (port, reqPath, { method = 'GET', headers = {}, body = null, host } = {}) =>
     new Promise((resolve, reject) => {
@@ -1146,6 +1205,54 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     assert.equal(JSON.parse(r.body).ok, true);
     const onDisk = JSON.parse(fs.readFileSync(plansStore.PLANS_FILE, 'utf8'));
     assert.equal(onDisk.alerts.webhookUrl, SINK_URL, '掩码回显不得覆盖真实 webhook');
+  });
+
+  await ta('POST /api/prices/update：预览不落盘 → 应用写覆盖并记录 priceSource → 坏源/空 URL 报错', async () => {
+    // 本地价格源：回环 HTTP 服务直接吐 JSON，绝不外呼
+    const FIXTURE = JSON.stringify({
+      schema: 'ai-quota-prices/1', updated: '2099-01-01', source: 'fixture',
+      models: { 'glm-5.3': { in: 12, out: 30 }, 'fixture-new-model': { in: 1, out: 2 } },
+    });
+    const src = http.createServer((rq, rs) => { rs.writeHead(200, { 'Content-Type': 'application/json' }); rs.end(FIXTURE); });
+    await new Promise(r => src.listen(0, '127.0.0.1', r));
+    const SRC = `http://127.0.0.1:${src.address().port}/prices.json`;
+    const upd = (url, apply) => httpJson(P, '/api/prices/update', { method: 'POST', body: JSON.stringify({ url, apply }) });
+
+    // 空串 URL 且配置里也没存过 → 400（须在应用前测，应用后配置里会记住 URL）
+    assert.equal((await upd('', false)).status, 400, '无 URL 应 400');
+    // file: 协议 → 502（fetchPrices 协议白名单）
+    const fr = await upd('file:///etc/passwd', false);
+    assert.equal(fr.status, 502);
+    assert.ok(JSON.parse(fr.body).error.includes('协议'), JSON.parse(fr.body).error);
+
+    // 预览：返回差异但不落盘
+    let r = await upd(SRC, false);
+    assert.equal(r.status, 200);
+    let j = JSON.parse(r.body);
+    assert.equal(j.applied, false);
+    assert.ok(j.diff.added.includes('fixture-new-model'), '新模型应出现在 added');
+    assert.ok(j.diff.changes.some(c => c.model === 'glm-5.3' && c.field === 'in' && c.from === 8 && c.to === 12));
+    assert.equal(JSON.parse((await httpJson(P, '/api/plans')).body).priceOverrides['glm-5.3'], undefined, '预览不得写 priceOverrides');
+
+    // 应用：写入覆盖 + priceSource 检查记录 + 立即重算
+    r = await upd(SRC, true);
+    assert.equal(r.status, 200);
+    assert.equal(JSON.parse(r.body).applied, true);
+    const after = JSON.parse((await httpJson(P, '/api/plans')).body);
+    assert.deepEqual(after.priceOverrides['glm-5.3'], { in: 12, out: 30 });
+    assert.deepEqual(after.priceOverrides['fixture-new-model'], { in: 1, out: 2 });
+    assert.equal(after.priceSource.url, SRC);
+    assert.equal(after.priceSource.updated, '2099-01-01');
+    assert.equal(after.priceSource.lastResult, 'ok');
+    assert.ok(after.priceSource.lastCheck, '记录最近检查时间');
+    assert.equal(after.priceSource.models, 2);
+
+    // 坏 JSON 源 → 422；空 URL 此时回退已存配置（不再 400）
+    const bad = http.createServer((rq, rs) => { rs.writeHead(200); rs.end('not-json'); });
+    await new Promise(r2 => bad.listen(0, '127.0.0.1', r2));
+    assert.equal((await upd(`http://127.0.0.1:${bad.address().port}/x`, false)).status, 422);
+    assert.equal((await upd('', false)).status, 200, '空 URL 应回退已存 priceSource.url');
+    src.close(); bad.close();
   });
 
   await ta('Host 白名单（HTTP 层实测）：Host: evil.com / localhost.evil.com 一律 403', async () => {

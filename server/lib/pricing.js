@@ -5,16 +5,20 @@
 const DEFAULT_PRICING = {
   // 元 / 百万 tokens。cacheRead: 缓存命中输入价；
   // cacheWrite（缓存写入价）不预填——缺省按输入价计 cache_creation（诚实口径），可被 priceOverrides 覆盖
+  // 2026-10-23 按官方定价页更新：GLM 不变、新增 FlashX；MiniMax M3 永久 5 折（4.2/16.8→2.1/8.4）、
+  // 新增 M3.1-Flash；DeepSeek 改分时计价（取空闲/高峰均值折算，高峰为工作日 9-12 / 14-18 点）
   'glm-5.3':        { in: 8,   out: 28,  cacheRead: 2 },
   'glm-5.2':        { in: 8,   out: 28,  cacheRead: 2 },
   'glm-5.3-flash':  { in: 0.8, out: 2.8, cacheRead: 0.23 },
   'GLM-5.3-Flash':  { in: 0.8, out: 2.8, cacheRead: 0.23 }, // ZCode 同款
+  'GLM-5.3-FlashX': { in: 2,   out: 7,   cacheRead: 0.57 },
   'GLM-5.3':        { in: 8,   out: 28,  cacheRead: 2 },
-  'MiniMax-M3':     { in: 4.2, out: 16.8, cacheRead: 0.845 },
+  'MiniMax-M3':     { in: 2.1, out: 8.4, cacheRead: 0.42 },  // 官方永久 5 折价
+  'MiniMax-M3.1-Flash': { in: 1, out: 4, cacheRead: 0.1 },
   'MiniMax-M2.7':   { in: 2.1, out: 8.4,  cacheRead: null },
   'MiniMax-M2.7-highspeed': { in: 2.1, out: 8.4, cacheRead: null },
-  'deepseek-v4-pro':    { in: 4,   out: 16,  cacheRead: 0.8 },
-  'deepseek-v4-flash':  { in: 1,   out: 4,   cacheRead: 0.2 },
+  'deepseek-v4-pro':    { in: 6.75, out: 20.25, cacheRead: 0.23 }, // 分时均值（空闲 4.5/13.5，高峰 9/27）
+  'deepseek-v4-flash':  { in: 1.5,  out: 6,     cacheRead: 0.03 }, // 分时均值（空闲 1/4，高峰 2/8）
 };
 
 // 订阅制工具：成本是「等价按量成本」，非实际扣费
