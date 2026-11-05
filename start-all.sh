@@ -17,14 +17,18 @@ if [ -f "$HOME/.codex/auth.json" ]; then
 fi
 
 # 2) 看板服务（HTTP 探活判断，比 pgrep 可靠：进程僵死/退出中也算未运行）
+# 探活统一走 /api/health：该端点不触发快照全量构建，冷启动也能秒回——
+# 旧版打 /api/summary 会在冷启动期 2s 超时 → 误判未运行 → 拉起双实例互写 .port
 PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo 7788)"
-if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:${PORT_NOW}/api/summary"; then
+if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:${PORT_NOW}/api/health"; then
   echo "看板服务已在运行"
 else
   echo "启动看板服务..."
   nohup "$NODE" "$DIR/server/index.js" > /tmp/ai-quota-server.log 2>&1 &
   sleep 2
-  curl -s --max-time 3 -o /dev/null -w "服务状态: HTTP %{http_code}（冷启动约需 30s）\n" http://127.0.0.1:7788/
+  # 启动后重读 .port：7788 被占时服务会自动后移，探活与提示都必须跟实际端口走
+  PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo "$PORT_NOW")"
+  curl -s --max-time 3 -o /dev/null -w "服务状态: HTTP %{http_code}（冷启动约需 30s）\n" "http://127.0.0.1:${PORT_NOW}/api/health"
 fi
 
 # 3) 菜单栏应用（可选，仅 macOS 且已编译）
@@ -47,4 +51,4 @@ if [ -d "$DIR/desktop/AIQuotaWidget.app" ]; then
   fi
 fi
 
-echo "完成。网页端: http://localhost:7788"
+echo "完成。网页端: http://localhost:${PORT_NOW}"
