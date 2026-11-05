@@ -35,6 +35,9 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 - 📊 **Weekly & monthly reports**: a seven-section Markdown report (costs vs last period / tool ranking / top-5 models / budget attainment) in one click — copy it into your weekly meeting or download as .md
 - 🎯 **Daily cost target**: set a ¥200/day budget and track remaining budget plus projected exhaustion time in the banner, the percentage in the menu bar, and a system notification when it's used up (💸)
 - 🆚 **vs yesterday**: same-time and full-day comparison, so you can tell at a glance whether today is burning faster
+- 🌐 **Local network traffic**: 60s interface-counter deltas grouped by the network you're on (WiFi SSID / Ethernet / USB), daily & monthly totals, live rate, stacked 30-day chart and an optional per-day traffic goal bar (macOS, no extra permissions)
+- 🔌 **VPN data-cap quota**: reads the `subscription-userinfo` header of your panel's subscription URL — server-side metering, same numbers as the panel: used % bar, remaining, expiry countdown, daily usage, and low-remaining push alerts before you run out
+- ☁️ **Optional login & cloud deploy**: scrypt-hashed credentials, HttpOnly sessions, per-IP rate limiting, domain Host allowlist and a read-only archive mode; the deploy pack mechanically strips every key — collection stays on your machines, the server is just a gated display (see [docs/DEPLOY.md](docs/DEPLOY.md))
 - 🔌 **MCP server**: let ZCode / Claude Code / Codex answer "how much quota did I burn this week?"
 
 ## 🚀 Up and running in 30 seconds

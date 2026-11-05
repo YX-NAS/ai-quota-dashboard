@@ -1,9 +1,14 @@
 # 用户本地配置（含实时额度 API Key / Token，切勿提交）
 config/plans.json
+config/auth.json
 config/.zhipu-team-context.json
 config/.port
 # 历史归档库（SQLite，含 -wal/-shm 伴生文件）
 config/*.sqlite*
+# 运行时状态与本地数据（数值基线/站内消息，重启自产，无需入库）
+config/notifications.json
+config/network-state.json
+config/vpn-state.json
 
 # macOS
 .DS_Store
@@ -21,3 +26,4 @@ dist/
 
 # ZCode 客户端自动生成（工具工件，不入库）
 .zcodeignore
+.zcode/

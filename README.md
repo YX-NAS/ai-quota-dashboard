@@ -40,6 +40,9 @@
 - 📤 **数据带得走**：每日明细 / 模型费用一键导出 CSV，整份快照导出 JSON——数据属于你
 - 🎯 **当日目标成本**：给每天定个 ¥200 的成本目标，横幅里看剩余预算、预计用完时间，菜单栏看百分比，用完/超支弹系统通知提醒（💸）
 - 🆚 **和昨天比**：今日同期 vs 昨日同期、昨日全天，一眼看出今天烧得快不快
+- 🌐 **本机网络流量监控**：60s 一次网卡计数器差分，按接入网络（WiFi 名 / 有线 / USB 网卡）分账，今日/本月/实时速率 + 每日堆叠趋势 + 可设「每日流量目标」进度条（macOS，零权限）
+- 🔌 **VPN 流量包额度**：订阅地址响应头直读服务端计量（upload/download/total/expire），已用%进度条 + 剩余/到期/今日用量，快用完自动预警推送——续订前永远先知
+- ☁️ **可选登录 + 云端部署**：scrypt 哈希凭据 + HttpOnly 会话 + IP 限流；域名白名单与只读归档模式让云服务器跑一份「零密钥」展示端，密钥永不离开你的电脑（[部署指南](docs/DEPLOY.md)）
 - 🔌 **MCP Server**：让 ZCode / Claude Code / Codex 直接问你「这周用了多少额度」
 
 ## 🚀 30 秒上手
@@ -204,11 +207,31 @@ node 首次监听端口时 Windows 会问一次「允许访问」，点允许即
 **能部署到服务器 / 局域网共享吗？**
 它是单机工具：数据在各自主机的用户目录里，服务只监听 `127.0.0.1`。多机就每台跑一份；真要远程看，自己加反向代理和鉴权。
 
+## ☁️ 部署到你的服务器（可选）
+
+默认形态是**纯本地**服务（127.0.0.1，无需登录）。想让 `https://你的域名` 在外网访问：
+
+1. 服务器 `git clone` 本仓库 + Node 22.13+，生成登录凭据（密码只以 scrypt 哈希落盘，不进 git）：
+   ```bash
+   node scripts/hash-password.js 你的用户名 --save   # 写服务器本地 config/auth.json
+   ```
+2. 本机（数据源侧）打包脱敏数据并定时同步：
+   ```bash
+   ./scripts/cloud-sync.sh user@server:/srv/ai-quota-config   # 归档 backup + 去密钥 plans，密钥零出境
+   ```
+3. 服务以只读模式跑 + 反代配 HTTPS 与 `proxy_set_header Host $host`：
+   ```bash
+   AI_QUOTA_HISTORY=readonly AQD_HOSTS=quota.example.com node server/index.js
+   ```
+
+完整清单（Caddy/nginx/systemd、安全核对表）见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。云端拿不到任何 API Key——采集永远发生在你自己的电脑上，服务器只是「显示器」。
+
 ## 🗺️ Roadmap
 
 - ✅ 历史数据持久化（v1.5 已交付）：每日聚合写入本地 SQLite，原始日志清理后历史不丢
 - ✅ 额度预警全端可配置（v1.5 已交付）：四通道推送与阈值进设置面板
 - ✅ v1.6 已交付：Web UI 数据看板重设计 · 在线更新模型单价（价格源 JSON）· 工具卡片显隐 · `/Applications` 一键启动器
+- ✅ v1.7 已交付：网络流量按网络聚合（目标进度条）· VPN 流量包额度与续订预警 · 登录鉴权 + 域名/云端零密钥部署 · 站内通知中心 · 缺失模型单价自动补充 · Codex 官方会话采集 · 套餐性价比对比
 - **Web 端英文化**：界面 i18n（当前 README.en 读者点进来是中文 UI，欢迎 PR）
 - **版本更新检查**：只读轮询 GitHub Releases 提示新版本（可关）
 - macOS 二进制签名公证：让 Release 下载的 App 免除右键打开步骤（需要 Apple 开发者账号）
@@ -220,22 +243,22 @@ Windows 托盘 / 桌面卡片（`tray.ps1` / `widget.ps1`）为**社区验证阶
 ## 🔒 隐私与安全
 
 - 所有采集**只读**，绝不写任何工具的数据库
-- API Key / OAuth Token 只存本机 `config/plans.json`（文件权限 600、原子写入），**任何接口都不会返回密钥明文**，服务只接受 localhost 访问
-- 服务只监听 `127.0.0.1`，外面访问不到
+- API Key / OAuth Token 只存本机 `config/plans.json`（文件权限 600、原子写入），**任何接口都不会返回密钥明文**；登录凭据另存 `config/auth.json`（只有 scrypt 哈希，同样不进版本库）
+- 默认只监听 `127.0.0.1`，外面访问不到；启用云端部署时凭据即门禁（scrypt + 会话 cookie + 限流），且部署包机械性剥除全部密钥（`scripts/deploy-pack.js`）
 - 不上传、不同步、不打点——你的用量数据只属于你
 
 ## 📂 目录结构
 
 ```
 server/index.js         HTTP 服务 + 60s 定时刷新
-server/collectors/      4 个用量采集器 + 3 个实时额度采集器
-server/lib/             计价 / 聚合 / 配置 + history.js（归档）/ alerts.js（预警）/ report.js（周月报）
-web/                    前端单页（零依赖）
+server/collectors/      用量 / 实时额度 / API 余额 / 网络流量 / VPN 流量包采集器
+server/lib/             计价 / 聚合 / 配置 / auth（登录）+ history.js（归档）/ alerts.js（预警）/ report.js（周月报）
+web/                    前端单页（零依赖）+ login.html（自包含登录页）
 mcp/mcp.js              MCP Server（兼 CLI）
 menubar/                macOS 菜单栏（Swift）+ Windows 托盘（PowerShell，可选）
 desktop/                macOS 桌面组件（Swift）+ Windows 桌面卡片（PowerShell，可选）
 start-all / stop-all    一键启动/停止（.sh = macOS/Linux，.cmd = Windows）
-scripts/                辅助脚本（token 同步、演示数据、Windows 启停逻辑）
+scripts/                辅助脚本（token 同步、演示数据、hash-password / deploy-pack / cloud-sync、Windows 启停）
 config/plans.json       用户配置（自动生成，不进版本库）
 test/                   单元测试 + 数据核验
 docs/                   设计文档 + 截图 + 图文手册（USER_GUIDE.md）

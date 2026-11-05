@@ -21,9 +21,15 @@
 | ChatGPT 实时额度 | `~/.codex/auth.json` 的 OAuth access_token → `chatgpt.com/backend-api/wham/usage` | 套餐 rate-limit 窗口（5h/周/月） | 尽力而为：失败不阻塞，卡片显示「实时额度不可用」 |
 | 智谱 Coding Plan 实时额度（团队版） | `open.bigmodel.cn/api/monitor/usage/quota/limit?type=2` + `bigmodel-organization`/`bigmodel-project` 头 | limits[]：unit3+number5 = 5h 窗口，unit6 = 周窗口（TOKENS/CREDIT_LIMIT，含 percentage 与 nextResetTime）；org/project 经 `/api/biz/customer/getCustomerInfo` 枚举 projectType=2 项目后试取 | 凭证按序：**plans.json `quotaKeys.zhipu`（设置面板手动配置，优先）** → ZCode OAuth（`~/.zcode/v2/credentials.json`，enc:v1 AES-256-GCM 本机可解）→ WorkBuddy GLM key → ZCode config key；org/project 手动配置优先，其次落盘缓存 `config/.zhipu-team-context.json`，OAuth 失效时凭 key+缓存继续查询 |
 | MiniMax 实时额度 | `www.minimaxi.com/v1/api/openplatform/coding_plan/remains` | model_remains[]（general 通道的 5h/周剩余） | key 按序：plans.json `quotaKeys.minimax` → `~/.workbuddy-ai/models.json` 自动发现 |
+| 智谱 API 按量计费余额 | `open.bigmodel.cn/api/biz/customer/getCustomerInfo`（`server/collectors/api-billing.js`） | `balance / availableBalance / rechargeAmount / giveAmount`（新账户未充值 = null → UI 显示「未充值」） | 凭证链：ZCode 自定义供应商 key → plans.json → ZCode OAuth → WorkBuddy/config key；2026-10-30 起用户停用团队套餐，ZCode 走个人按量账户；响应 60s 进程内缓存 |
+| DeepSeek API 按量计费余额 | `api.deepseek.com/user/balance` | `balance_infos[]`（CNY 行的 total/granted/topped_up） | key 按序：ZCode 自定义供应商（provider_config.json）→ plans.json `quotaKeys.deepseek`（设置面板可配，脱敏存储）→ `~/.cc-switch/cc-switch.db` 的 DeepSeek 行自动发现 |
+| Kimi API 按量计费余额 | `api.moonshot.cn/v1/users/me/balance` | `data.available_balance / cash_balance / voucher_balance` | key 按序：ZCode 自定义供应商（moonshot-kimi）→ plans.json `quotaKeys.moonshot` → cc-switch 'Kimi' 行 → WorkBuddy |
+| ZCode 自定义服务商发现 + Key 健康检测 | `~/.zcode/v2/provider_config.json`（`server/lib/zcode-providers.js`，mtime 缓存随快照重读）→ 逐 provider 探活 `GET {base}/models`（anthropic-messages 型 base+`/v1/models` 走 x-api-key） | providerId/label/vendor/billingKind(按量·订阅)/models/keyMasked + keyChecks{ok,reason,checkedAt} | 「API 按量计费」区块的服务商卡片以此列表为准（增删服务商 ≤60s 自动跟上）；`sk-cp-` 前缀或 coding/start-plan 特征 = 订阅不查金额余额；探活不耗额度，只读 |
+| 阿里云百炼账户余额 | BSS OpenAPI `business.aliyuncs.com/?Action=GetAccountBalance`（RPC HMAC-SHA1 签名，`server/collectors/api-billing.js`） | `Data.AvailableAmount/BalanceAmount/CreditAmount/Currency` | DashScope **无**按量余额接口（实测端点全 404）；需阿里云 AccessKey（plans.json `quotaKeys.bailian`，Secret 脱敏存储），未配置时卡片只显示用量费用 |
+| 按服务商用量/费用 | 本机四采集器 rows × `vendorForRow`（`server/lib/store.js` `vendorAggregate`） | 各服务商今日/本月 requests、tokens、costCny | **归因以行的 `provider_id` 为准**（ZCode 采集器随行携带），订阅制 provider（`account:*`/coding-plan/start-plan）返回 null 不进按量桶；无 provider 的行回退模型名规则（`vendorOf`：glm→zhipu、MiniMax→minimax、deepseek、kimi/moonshot、qwen/qwq/tongyi→bailian、claude、gpt/codex）。百炼托管三方模型因此归 bailian。纯计算恒有（快照 `vendors` 字段），独立于 agg/历史归档；cc-switch 行真实 costUsd 直接采信，其余按单价表等价计费 |
 
 口径说明：
-- ZCode（bigmodel coding plan）与 WorkBuddy 自定义模型（GLM Coding Plan / MiniMax Token Plan）为**订阅套餐**，不按 token 扣费 → 展示「等价按量成本」+ 用户可配置的套餐额度。
+- ZCode（bigmodel coding plan）与 WorkBuddy 自定义模型（GLM Coding Plan / MiniMax Token Plan）为**订阅套餐**，不按 token 扣费 → 展示「等价按量成本」+ 用户可配置的套餐额度。**2026-10-30 起智谱团队套餐已停用，转为 API 按量计费**（智谱个人账户 + DeepSeek 等，见「API 按量计费」区块）。
 - Codex 走 cc-switch 代理的请求自带 `total_cost_usd`（OpenAI 官方价或配置单价），直接采信。
 
 ## 3. 目录结构
@@ -33,20 +39,25 @@ ai-quota-dashboard/
 ├── server/
 │   ├── index.js            # HTTP 服务 + 路由 + 定时刷新（跨平台）
 │   ├── lib/
-│   │   ├── store.js        # 聚合存储：requests[]、日/月汇总、缓存
-│   │   ├── pricing.js      # 单价表 + 成本计算
+│   │   ├── store.js        # 聚合存储：requests[]、日/月汇总、按服务商聚合、缓存
+│   │   ├── pricing.js      # 单价表 + 成本计算 + 服务商归因（vendorOf / vendorForRow）
 │   │   ├── plans.js        # 用户额度配置读写 (config/plans.json)
-│   │   ├── history.js      # 历史归档库 history.sqlite（写入 + 补缺合并）
-│   │   ├── alerts.js       # 额度预警引擎（评估 / 冷却 / webhook 推送）
-│   │   └── report.js       # 周报 / 月报生成（纯函数 → Markdown）
+│   │   ├── price-source.js # 在线单价源拉取（parse/diff/merge + 安全 fetch）
+│   │   ├── zcode-providers.js # ZCode 自定义模型服务商发现（provider_config.json 动态读）
+│   │   ├── history.js      # 历史归档库 history.sqlite（写入 + 补缺合并 + daily_network 网络流量）
+│   │   ├── alerts.js       # 额度预警引擎（评估 / 冷却 / webhook 推送 / 通道适配器）
+│   │   ├── push.js         # 定时推送调度（每日摘要 / 周月报，复用 alerts 通道）
+│   │   └── report.js       # 周报 / 月报生成（纯函数 → Markdown，表格版 + 列表版）
 │   └── collectors/
-│       ├── zcode.js        # ~/.zcode SQLite 只读采集
+│       ├── zcode.js        # ~/.zcode SQLite 只读采集（行带 provider_id 供计费归因）
 │       ├── ccswitch.js     # ~/.cc-switch/cc-switch.db 采集
 │       ├── claudecode.js   # ~/.claude jsonl 采集
 │       ├── workbuddy.js    # ~/.workbuddy-ai jsonl 采集
 │       ├── chatgpt-quota.js# ChatGPT 实时额度（尽力而为）
 │       ├── minimax-quota.js# MiniMax 实时额度
-│       └── zhipu-quota.js  # 智谱 Coding Plan 实时额度（团队版）
+│       ├── zhipu-quota.js  # 智谱 Coding Plan 实时额度（团队版，2026-10-30 起套餐停用）
+│       ├── api-billing.js  # API 按量计费：各家余额（智谱/DeepSeek/Kimi/阿里云BSS）+ 逐服务商 Key 探活
+│       └── network-traffic.js # 网络流量采集（macOS 专属）：netstat -ib 差分 + SSID/端口名归因
 ├── web/
 │   ├── index.html          # 单页看板
 │   └── app.js + style.css
@@ -80,7 +91,7 @@ ai-quota-dashboard/
 
 ## 5. 计价
 
-- 内置单价表（元/百万 token，2026-10-23 官方定价页采集）：GLM-5.3 / 5.2 = 8/28（缓存命中 2），GLM-5.3-Flash = 0.8/2.8（缓存 0.23），GLM-5.3-FlashX = 2/7（0.57）；MiniMax-M3 = 2.1/8.4（官方永久 5 折，缓存 0.42），M3.1-Flash = 1/4（0.1），M2.7 = 2.1/8.4；DeepSeek 分时计价取空闲/高峰均值：v4-pro = 6.75/20.25（0.23）、v4-flash = 1.5/6（0.03）
+- 内置单价表（元/百万 token，2026-10-23 官方定价页采集）：GLM-5.3 / 5.2 = 8/28（缓存命中 2），GLM-5.3-Flash = 0.8/2.8（缓存 0.23），GLM-5.3-FlashX = 2/7（0.57）；MiniMax-M3 = 2.1/8.4（官方永久 5 折，缓存 0.42），M3.1-Flash = 1/4（0.1），M2.7 = 2.1/8.4；DeepSeek 分时计价取空闲/高峰均值：v4-pro = 6.75/20.25（0.23）、v4-flash = 1.5/6（0.03）；阿里云百炼（2026-10 北京地域最小档，缓存命中按输入价保守计）：qwen3.8-flash = 0.8/2.7，qwen3.7-plus = 2/8，qwen3.7-max = 12/36
 - **在线更新单价**：设置面板「在线更新单价」区从价格源 JSON 拉最新价（默认 `config/prices.source.json` 的 jsDelivr 镜像），先预览差异再应用；应用 = 写入 `priceOverrides` + 立即重算历史。拉取仅 http/https、拒重定向、10s 超时、256KB 上限（`server/lib/price-source.js`，API `POST /api/prices/update {url, apply}`）
 - Codex：直接用库里的 `total_cost_usd`，不做二次估算
 - 未收录模型：只计 token，不计费，页面标注「无单价」
@@ -104,7 +115,7 @@ ai-quota-dashboard/
 | `POST /api/prices/update` | 在线单价更新：`{url, apply}`；apply=false 拉取+校验+差异预览（不落盘），apply=true 合并进 priceOverrides 并立即重算 |
 | `GET /web/*` | 静态文件 |
 
-## 8. 页面设计（暗色主题，跟随系统）
+## 8. 页面设计（暗色/日间双主题，跟随系统；靛蓝主色渗透中性色，明快亲和）
 
 1. 顶部：总览 KPI（今日请求 / 今日 token / 今日成本 / 本月成本）
 2. 工具卡片区（ChatGPT·Codex / Claude Desktop / ZCode / WorkBuddy）：今日与本月用量、成本、额度进度条、**本月预估（按已过天数线性外推）**、数据新鲜度
@@ -154,3 +165,38 @@ ai-quota-dashboard/
 - **webhook URL 掩码**：path+query 即推送密钥——接口回显与日志只允许出现 `scheme://host/` + `••••`，错误消息消毒同样替换完整 URL 与 path 片段
 - **SSRF 防护**：仅允许 http/https 协议（file:/data: 等显式拒绝），10s 超时、不跟随重定向；单条发送失败只记状态不抛
 - **泄露面**：推送文案只含百分比 / 金额 / 倒计时，绝不含 token 或密钥明细；`run` 整体 try/catch，异常不得逃逸拖垮主进程
+
+### 10.3 微信推送与定时调度（v1.7）
+
+**通道适配器**（`alerts.js` `ADAPTERS`，`buildPayload → {url, headers, body}` + 可选 `verify(res)` 响应体校验钩子）：
+
+| 通道 | 形态 | 说明 |
+|---|---|---|
+| `wecom` | 企业微信群机器人 webhook，`msgtype=markdown` | 主力微信通道：免费、无每日条数限制（20 条/分钟）、支持字体色。**关键陷阱**：业务失败也返回 HTTP 200 + `{"errcode":非0}`，必须 `verify()` 解析响应体（`httpRequest` 收集 ≤8KB 响应体供校验），否则配错的 key 被当成功 |
+| `serverchan` | Server酱 SendKey，form 编码 `title/desp` | 微信服务号推送，免费版每天 5 条；desp 优先放 Markdown 卡片 |
+| ntfy / bark / generic | 不变 | 纯文本，能力有限不卡片化 |
+
+**消息卡片**（`renderCard`，多行 Markdown）：预警事件按数据渲染——剩余百分比（三家都有）、绝对值（仅智谱 used/total，千分位展示不解释单位口径）、重置倒计时 / 当日目标进度；wecom 标题着色 critical=红 / warning=灰 / info（摘要·测试）=绿。`digest` / 测试等自定义卡片直接走 `ev.card` 覆盖。
+
+**定时推送**（`server/lib/push.js`，挂在快照构建成功后与 `alerts.run` 同点，无 cron）：
+
+- **每日摘要**（`buildDigest` 纯函数）：今日消耗 / 目标进度 / 工具 Top3 / 三家 provider 当前 5h+周窗口用量（available 才列）
+- **周报 / 月报**：复用 `report.js buildReport`，`format:'list'` 列表版（企业微信 markdown 不支持表格，三处表格降级为 `- 指标：值` 行；网页表格版零影响）；正文剥掉首行 H1 由通道标题代替
+- **调度规则**：北京时间当天/周一/每月 1 号到点后首个快照周期触发；**去重键** `digest|YYYY-MM-DD` / `report|week|周一日期` / `report|month|YYYY-MM` 复用 `alert_log` 表；**失败也写 store**（本期不重试）；错过补发仅限当天（周二开机不补周一周报）；上周/上月无数据不推（`empty` 不写 store，当天晚些归档出数据可再评估）
+- **配置**（`plans.alerts`，与预警共用通道）：`digest: {enabled, hour}`、`reportPush: {week: {enabled, hour}, month: {enabled, hour}}`，`load()` 会对老配置补齐嵌套 key；`POST /api/alerts/test` 用面板当前值（或已存配置）立即推一条测试消息，企业微信 errcode 的 errmsg 会透出到前端——配置对不对点一下就知道
+
+### 10.4 网络流量监控（macOS，`server/collectors/network-traffic.js`）
+
+- **采集口径**：跟随 60s 快照周期 spawn `netstat -ib`，解析 Link 行（`tokens[2]` 以 `<Link#N>` 标记、字节在末 7 列布局），只保留 `en*` 物理网卡；对**累计字节计数器做差分**得到区间上下行 —— 并发/重复构建天然不双计，计数器回绕（重启/唤醒清零）按 0 计并重置基线。
+- **网络归因**：WiFi 接口 → `wifi:<SSID>`（SSID 探测链 `ipconfig getsummary` → `networksetup -getairportnetwork`）；其他 → `iface:<dev>`（label 取 `networksetup -listallhardwareports` 硬件端口名，10min 缓存）。**SSID 隐私**：macOS Sonoma+ 全命令行路径需「定位服务」授权宿主 App，未授权拿到 `<redacted>` → 按接口名归桶（label=Wi-Fi），前端卡片提示授权方法。
+- **归档**：history.sqlite `daily_network(date, network, label, rx_bytes, tx_bytes)`，**增量累加 UPSERT**（`rx=rx+excluded.rx`，不走指纹缓存——差分即增量）；差分基线 + 当前网络记忆存 `config/network-state.json`（原子写），多进程（index.js / mcp.js）各自差分互不双计。
+- **快照暴露**：`snap.network = { error, current:{key,label,iface,rxRate,txRate}, today, month, series[31天] }`，today/month/series 均从归档库回读（单一事实源）；失败只记 `collectorErrors.networkTraffic`（string），非 macOS 平台返回 error 不抛。
+- **前端**：`web/js/render-network.js` —— 两个区块独立显隐：「网络流量」实时卡置于套餐额度进度条之下（含**每日流量目标进度条**，目标 `plans.dailyGoal.networkGB`，设置面板可配，0 = 不显示，档位配色同额度条），「网络流量趋势（近 30 天）」按网络堆叠柱状图紧挨成本趋势图（SVG 拼法同款，柱宽封顶 48px 居中），各自无数据整区隐藏。
+
+### 10.5 VPN 流量包额度（macOS/跨平台，`server/collectors/vpn-quota.js`）
+
+- **数据源**：面板「订阅地址」的 `subscription-userinfo` 响应头（upload/download/total/expire）= 服务端账单口径，与面板页面数字一致；不用登录 Cookie（token 在订阅路径内，长期有效），也不用本地 utun 差分（Clash 系统代理分流模式测不到隧道流量）。`http-json.requestMeta` HEAD 优先拿头，缺头退回 GET（体限 2MB 即弃）。
+- **安全**：订阅 URL 属机密（`QUOTA_KEY_FIELDS.vpnPanel.secrets=['url']`），接口只出 `maskSecret` 掩码、掩码回显未改动 = 保留原值；错误回显前 `maskSubUrl` 把 path 整段替换 `/***`。协议白名单 + 不跟随重定向（同 SSRF 口径）。
+- **今日用量**：累计计数器差值 = 增量，基线存 `config/vpn-state.json`（原子写，服务重启不双计）；增量累加进 `daily_vpn(date PK, used_bytes, total_bytes, expire_at)`（SQL 累加 + COALESCE 覆盖元数据）。
+- **预警**：`alerts.evaluate` 第 8 类事件 `kind:'vpn'`，阈值 `thresholds.vpnUsed`（默认 90 = 已用%），冷却 key `vpn|北京日期`；≥99% critical。wecom `renderCard` 有 vpn 分支（剩余流量%+消息行），原始字节不进卡片避免 fmtNum 误导。
+- **前端**：「套餐统计」区 VPN 卡（`render-cards.js`）：已用%进度条（档位同额度条）+ 剩余/到期（`Math.floor` 天与面板同口径）+ 今日/累计；未配置 skip 不渲染，失败态复用额度失败行。

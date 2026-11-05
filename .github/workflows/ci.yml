@@ -33,4 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Syntax check (swiftc -parse)
-        run: swiftc -parse menubar/menubar.swift desktop/desktop-widget.swift
+        # 两文件必须分别 parse：合编时各自的顶层表达式会互相视为重复/冲突而恒挂
+        run: |
+          swiftc -parse menubar/menubar.swift
+          swiftc -parse desktop/desktop-widget.swift
