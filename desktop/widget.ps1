@@ -37,6 +37,12 @@ function Format-Tok([long]$v) {
   elseif ($v -ge 10000) { '{0:N1}万' -f ($v / 10000.0) }
   else { "$v" }
 }
+# 字节流量格式化（1024 进制，与网页 fmtBytes / macOS 组件同口径）
+function Format-Bytes([double]$v) {
+  $units = @('B', 'KB', 'MB', 'GB', 'TB'); $i = 0; $x = [math]::Abs($v)
+  while ($x -ge 1024 -and $i -lt $units.Count - 1) { $x /= 1024; $i++ }
+  if ($i -eq 0 -or $x -ge 100) { '{0:N0}{1}' -f $x, $units[$i] } else { '{0:N1}{1}' -f $x, $units[$i] }
+}
 function Format-Reset($ms) {
   if ($null -eq $ms) { return '' }
   $t = [double]$ms
@@ -73,6 +79,12 @@ $script:W = @{
   ok = $false
   req = 0; tok = [long]0; cny = 0.0; payUsd = 0.0
   weekCny = 0.0; goalCny = 0.0; goalPct = 0.0
+  # 网络流量（对齐 macOS 组件：当前网络 + 今日上下行 + 每日目标进度条）
+  netLabel = ''; netRx = 0.0; netTx = 0.0
+  netRxRate = 0.0; netTxRate = 0.0
+  netGoalBytes = 0.0; netPct = 0.0
+  # VPN 流量包（对齐 macOS 组件：-1 = 不可用整块隐藏）
+  vpnPct = -1.0; vpnRem = 0.0; vpnToday = 0.0; vpnDays = -1
   quotas = @()            # @{ short; provider; u5; r5; u7; r7 }
   fetchedAt = $null
   collapsed = $false
@@ -146,6 +158,39 @@ function Update-Data {
   $script:W.goalPct = 0.0
   if ($script:W.goalCny -gt 0) {
     $script:W.goalPct = [math]::Min($cny / $script:W.goalCny * 100.0, 999.0)
+  }
+
+  # 网络流量（与 macOS 组件/网页同口径）：键值宽松读取，旧版服务无 network 字段时整行不显示
+  $script:W.netLabel = ''; $script:W.netRx = 0.0; $script:W.netTx = 0.0
+  $script:W.netRxRate = 0.0; $script:W.netTxRate = 0.0
+  $script:W.netGoalBytes = 0.0; $script:W.netPct = 0.0
+  $nw = $s.network
+  if ($nw -and $nw.current -and $nw.current.label) {
+    $script:W.netLabel = [string]$nw.current.label
+    $script:W.netRxRate = [double]$nw.current.rxRate
+    $script:W.netTxRate = [double]$nw.current.txRate
+    if ($nw.today) {
+      $script:W.netRx = [double]$nw.today.rx
+      $script:W.netTx = [double]$nw.today.tx
+    }
+    $gb = [double]$s.plans.dailyGoal.networkGB
+    if ($gb -gt 0) {
+      $script:W.netGoalBytes = $gb * 1024 * 1024 * 1024
+      $script:W.netPct = ($script:W.netRx + $script:W.netTx) / $script:W.netGoalBytes * 100.0
+    }
+  }
+
+  # VPN 流量包（snap.vpnQuota，订阅头计量；available 才显示，旧版服务/未配置静默跳过）
+  $script:W.vpnPct = -1.0; $script:W.vpnRem = 0.0; $script:W.vpnToday = 0.0; $script:W.vpnDays = -1
+  $vq = $s.vpnQuota
+  if ($vq -and ($vq.available -eq $true) -and $null -ne $vq.usedPercent) {
+    $script:W.vpnPct = [double]$vq.usedPercent
+    $script:W.vpnRem = [double]$vq.remainingBytes
+    $script:W.vpnToday = [double]$vq.todayBytes
+    $exp = [double]$vq.expireAt
+    if ($exp -gt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())) {
+      $script:W.vpnDays = [int][math]::Floor(($exp - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) / 86400000)
+    }
   }
 
   Build-Layout
@@ -262,6 +307,46 @@ function Build-Layout {
       $y += 20.0
     }
     $y += 4.0
+  }
+
+  if ($script:W.vpnPct -ge 0) {
+    $y += 4.0
+    Add-Text $pad $y $cw '🔌 VPN 流量包' 'Segoe UI' 9.0 'b' $script:C2 'l' $false
+    $y += 14.0
+    $vpColor = Get-BarColor ([int]$script:W.vpnPct)
+    Add-Text $pad $y $cw '流量包已用' 'Segoe UI' 8.0 'r' $script:C3 'l' $false
+    Add-Text $pad $y $cw ('{0:N0}%' -f [math]::Min($script:W.vpnPct, 999)) 'Segoe UI' 8.0 'r' $vpColor 'r' $false
+    $y += 13.0
+    Add-Bar $pad $y $cw 4.0 ([int][math]::Min($script:W.vpnPct, 100)) $vpColor
+    $y += 9.0
+    $vpnLine = '剩余 {0} · 今日 {1}' -f (Format-Bytes $script:W.vpnRem), (Format-Bytes $script:W.vpnToday)
+    if ($script:W.vpnDays -ge 0) { $vpnLine += ' · {0} 天后到期' -f $script:W.vpnDays }
+    Add-Text $pad $y $cw $vpnLine 'Segoe UI' 8.0 'r' $script:C3 'l' $false
+    $y += 12.0
+  }
+
+  if ($script:W.netLabel) {
+    $y += 4.0
+    Add-Text $pad $y $cw ('📶 ' + $script:W.netLabel) 'Segoe UI' 9.0 'b' $script:C2 'l' $false
+    $y += 14.0
+    if ($script:W.netGoalBytes -gt 0) {
+      $npColor = Get-BarColor ([int]$script:W.netPct)
+      Add-Text $pad $y $cw '每日流量目标' 'Segoe UI' 8.0 'r' $script:C3 'l' $false
+      Add-Text $pad $y $cw ('{0:N0}%' -f [math]::Min($script:W.netPct, 999)) 'Segoe UI' 8.0 'r' $npColor 'r' $false
+      $y += 13.0
+      Add-Bar $pad $y $cw 4.0 ([int][math]::Min($script:W.netPct, 100)) $npColor
+      $y += 9.0
+      $leftB = [math]::Max($script:W.netGoalBytes - $script:W.netRx - $script:W.netTx, 0)
+      Add-Text $pad $y $cw ('今日 ↓{0} · ↑{1} · 剩 {2}' -f (Format-Bytes $script:W.netRx), (Format-Bytes $script:W.netTx), (Format-Bytes $leftB)) 'Segoe UI' 8.0 'r' $script:C2 'l' $false
+      $y += 12.0
+    } else {
+      Add-Text $pad $y $cw ('今日 ↓{0} · ↑{1}' -f (Format-Bytes $script:W.netRx), (Format-Bytes $script:W.netTx)) 'Segoe UI' 8.0 'r' $script:C2 'l' $false
+      $y += 12.0
+    }
+    if ($script:W.netRxRate -gt 1024 -or $script:W.netTxRate -gt 1024) {
+      Add-Text $pad $y $cw ('实时速率 ↓{0}/s · ↑{1}/s' -f (Format-Bytes $script:W.netRxRate), (Format-Bytes $script:W.netTxRate)) 'Segoe UI' 8.0 'r' $script:C3 'l' $false
+      $y += 12.0
+    }
   }
 
   if ($script:W.goalCny -gt 0) {
@@ -494,11 +579,12 @@ $script:Form.ContextMenuStrip = $ctx
 
 $script:Form.Add_FormClosed({ param($sender, $e) Save-WidgetState; $script:Timer.Stop() })
 
-# 服务未就绪时 15s 快速重试，正常后回到 5 分钟
+# 服务未就绪时 15s 快速重试，正常后回到 5 分钟；失败（含一度就绪后失联）也回到 15s 快速重试
 $script:Timer = New-Object System.Windows.Forms.Timer
 $script:Timer.Interval = 15000
 $script:Timer.Add_Tick({
   if ($script:W.ok) { $script:Timer.Interval = $IntervalSec * 1000 }
+  else { $script:Timer.Interval = 15000 }
   Update-Data
 })
 

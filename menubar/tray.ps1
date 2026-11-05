@@ -331,11 +331,12 @@ function Stop-Tray {
   [System.Windows.Forms.Application]::Exit()
 }
 
-# 服务未就绪时 15s 快速重试，正常后回到 5 分钟
+# 服务未就绪时 15s 快速重试，正常后回到 5 分钟；失败（含一度就绪后失联）也回到 15s 快速重试
 $script:Timer = New-Object System.Windows.Forms.Timer
 $script:Timer.Interval = 15000
 $script:Timer.Add_Tick({
   if ($script:State.ok) { $script:Timer.Interval = $IntervalSec * 1000 }
+  else { $script:Timer.Interval = 15000 }
   Update-State
 })
 

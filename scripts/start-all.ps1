@@ -30,9 +30,11 @@ if (Test-Path $authJson) {
 }
 
 # ---------- 3) 看板服务 ----------
+# 探活统一走 /api/health：该端点不触发快照全量构建，冷启动也能秒回，
+# 避免 / 路径在冷启动期超时 → 误判未运行 → 拉起双实例互写 .port
 function Test-Dashboard([int]$p) {
   try {
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/" -UseBasicParsing -TimeoutSec 2
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:$p/api/health" -UseBasicParsing -TimeoutSec 2
     return ($r.StatusCode -eq 200)
   } catch { return $false }
 }

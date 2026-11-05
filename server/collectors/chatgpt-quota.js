@@ -6,36 +6,20 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const https = require('node:https');
+const { getJson } = require('../lib/http-json');
 const plansStore = require('../lib/plans');
 
 const AUTH = path.join(os.homedir(), '.codex', 'auth.json');
 
+// HTTP 实现移到 server/lib/http-json.js 的 getJson（[P1] 体超限先 resolve 再 destroy 修悬挂；
+// 非 200 reason 带脱敏后的响应体片段）。对外契约不变：{ ok, data?, reason? }。
 function fetchUsage(accessToken, accountId) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'chatgpt.com',
-      path: '/backend-api/wham/usage',
-      method: 'GET',
-      timeout: 8000,
-      headers: {
-        'Authorization': 'Bearer ' + accessToken,
-        'ChatGPT-Account-Id': accountId || '',
-        'User-Agent': 'ai-quota-dashboard/1.0',
-      },
-    }, (res) => {
-      let buf = '';
-      res.on('data', c => { buf += c; if (buf.length > 256 * 1024) req.destroy(); });
-      res.on('end', () => {
-        if (res.statusCode !== 200) return resolve({ ok: false, reason: 'HTTP ' + res.statusCode });
-        try { resolve({ ok: true, data: JSON.parse(buf) }); }
-        catch (e) { resolve({ ok: false, reason: 'bad json' }); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'timeout' }); });
-    req.on('error', e => resolve({ ok: false, reason: e.message }));
-    req.end();
-  });
+  const headers = {
+    'Authorization': 'Bearer ' + accessToken,
+    'User-Agent': 'ai-quota-dashboard/1.0',
+  };
+  if (accountId) headers['ChatGPT-Account-Id'] = accountId; // accountId 为空时不发空串头
+  return getJson('https://chatgpt.com/backend-api/wham/usage', { headers, timeoutMs: 8000 });
 }
 
 async function collect() {

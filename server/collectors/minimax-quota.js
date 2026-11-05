@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const https = require('node:https');
+const { getJson } = require('../lib/http-json');
 const plansStore = require('../lib/plans');
 
 const MODELS_FILE = path.join(os.homedir(), '.workbuddy-ai', 'models.json');
@@ -19,30 +19,19 @@ function getMiniMaxKey() {
   } catch { return null; }
 }
 
-function fetchRemains(apiKey) {
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname: 'www.minimaxi.com',
-      path: '/v1/api/openplatform/coding_plan/remains',
-      method: 'GET',
-      timeout: 10_000,
-      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
-    }, (res) => {
-      let buf = '';
-      res.on('data', c => { buf += c; if (buf.length > 128 * 1024) req.destroy(); });
-      res.on('end', () => {
-        if (res.statusCode !== 200) return resolve({ ok: false, reason: 'HTTP ' + res.statusCode });
-        try {
-          const d = JSON.parse(buf);
-          if ((d.base_resp && d.base_resp.status_code) === 0) return resolve({ ok: true, data: d });
-          resolve({ ok: false, reason: (d.base_resp && d.base_resp.status_msg) || 'bad payload' });
-        } catch (e) { resolve({ ok: false, reason: 'bad json' }); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'timeout' }); });
-    req.on('error', e => resolve({ ok: false, reason: e.message }));
-    req.end();
+// HTTP 实现移到 server/lib/http-json.js 的 getJson（[P1] 体超限先 resolve 再 destroy 修悬挂；
+// 非 200 reason 带脱敏后的响应体片段）。对外契约不变：{ ok, data?, reason? }；
+// base_resp.status_code 业务校验保留在本层（原实现里与 HTTP 层合一，语义等价）。
+async function fetchRemains(apiKey) {
+  const r = await getJson('https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains', {
+    headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+    timeoutMs: 10_000,
+    maxBytes: 128 * 1024, // 本端点响应很小，保留原实现的 128KB 上限（其余端点默认 256KB）
   });
+  if (!r.ok) return { ok: false, reason: r.reason };
+  const d = r.data;
+  if ((d && d.base_resp && d.base_resp.status_code) === 0) return { ok: true, data: d };
+  return { ok: false, reason: (d && d.base_resp && d.base_resp.status_msg) || 'bad payload' };
 }
 
 async function collect() {

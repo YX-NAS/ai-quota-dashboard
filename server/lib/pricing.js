@@ -19,6 +19,10 @@ const DEFAULT_PRICING = {
   'MiniMax-M2.7-highspeed': { in: 2.1, out: 8.4, cacheRead: null },
   'deepseek-v4-pro':    { in: 6.75, out: 20.25, cacheRead: 0.23 }, // 分时均值（空闲 4.5/13.5，高峰 9/27）
   'deepseek-v4-flash':  { in: 1.5,  out: 6,     cacheRead: 0.03 }, // 分时均值（空闲 1/4，高峰 2/8）
+  // 阿里云百炼（Model Studio）2026-10 官方价（北京地域最小档；缓存命中价未收录，按输入价保守计）
+  'qwen3.8-flash': { in: 0.8,  out: 2.7 },
+  'qwen3.7-plus':  { in: 2,    out: 8 },   // 限时 8 折原价档
+  'qwen3.7-max':   { in: 12,   out: 36 },
 };
 
 // 订阅制工具：成本是「等价按量成本」，非实际扣费
@@ -26,6 +30,42 @@ const SUBSCRIPTION_TOOLS = new Set(['zcode', 'workbuddy', 'claudeCode']);
 
 // Codex 下 GPT 系列走 ChatGPT Plus 套餐（等价），其余（切 cc-switch 第三方）为真实按量
 const OPENAI_SUB_MODEL = /^(gpt[-_ ]|codex-auto-review|chatgpt)/i;
+
+// 模型名 → 服务商（API 按量计费归属），大小写不敏感；未识别返回 null
+// 注意顺序：kimi 系（k2/kimi）与 glm 系优先于更宽泛的前缀规则
+function vendorOf(model) {
+  const m = String(model || '').trim().toLowerCase();
+  if (!m) return null;
+  if (m.includes('glm')) return 'zhipu';
+  if (m.includes('minimax')) return 'minimax';
+  if (m.includes('deepseek')) return 'deepseek';
+  if (m.includes('kimi') || m.includes('moonshot') || /^k2/.test(m)) return 'moonshot';
+  // 火山方舟原生模型（豆包系）：方舟托管的三方模型（glm/deepseek/kimi…）走 providerId 归属，见 vendorForRow
+  if (m.includes('doubao') || m.includes('seedance') || m.includes('seedream') || m.includes('hunyuan')) return 'volcengine';
+  if (m.includes('qwen') || m.startsWith('qwq') || m.includes('tongyi') || m.includes('model-studio')) return 'bailian';
+  if (m.includes('claude') || m.startsWith('anthropic')) return 'anthropic';
+  if (/^(gpt|o1|o3|o4|chatgpt|codex)/.test(m) || m.includes('gpt-')) return 'openai';
+  return null;
+}
+
+// 请求行 → 计费服务商（按量口径）。provider_id 比模型名更准确——
+// 百炼 Model Studio 会托管三方模型（GLM/Kimi 经百炼计费），同模型名也可能分属订阅与按量账号；
+// 订阅制 provider（account:* / coding-plan / start-plan / zcode-plan）返回 null：
+// 等价成本不进按量桶，由工具卡片/套餐区块体现。无 provider 的行回退模型名规则。
+function vendorForRow(row) {
+  const pid = String(row.providerId || '').toLowerCase();
+  if (pid) {
+    if (/^account:|coding-plan|start-plan|zcode-plan/.test(pid)) return null;
+    if (pid.includes('bigmodel') || pid.includes('zhipu')) return 'zhipu';
+    if (pid.includes('model-studio') || pid.includes('bailian') || pid.includes('dashscope')) return 'bailian';
+    if (pid.includes('deepseek')) return 'deepseek';
+    if (pid.includes('minimax')) return 'minimax';
+    if (pid.includes('moonshot') || pid.includes('kimi')) return 'moonshot';
+    // 火山方舟线路：方舟托管的三方模型（glm/deepseek/kimi/qwen）计费归火山，ark 命名须排除 spark
+    if ((pid.includes('ark') && !pid.includes('spark')) || pid.includes('volc') || pid.includes('doubao')) return 'volcengine';
+  }
+  return vendorOf(row.model);
+}
 
 function classifyRow(row) {
   if (row.tool === 'codex') row.subscription = OPENAI_SUB_MODEL.test(row.model || '');
@@ -56,4 +96,4 @@ function makePricer(plans) {
   return { price, classifyRow, fx, table, isSubscription: t => SUBSCRIPTION_TOOLS.has(t) };
 }
 
-module.exports = { makePricer, DEFAULT_PRICING, SUBSCRIPTION_TOOLS, OPENAI_SUB_MODEL };
+module.exports = { makePricer, DEFAULT_PRICING, SUBSCRIPTION_TOOLS, OPENAI_SUB_MODEL, vendorOf, vendorForRow };

@@ -1,0 +1,6 @@
+{
+  "type": "module",
+  "private": true,
+  "description": "web/ 前端为 ES modules：<script type=\"module\" src=\"/js/main.js\">。此文件让 node --check（CI 语法检查）把 web/**/*.js 按 ESM 解析；浏览器与服务端静态服务不读取它。",
+  "comment": "根 package.json 固定 type=commonjs（server/ 等 CJS），不得在根上改 type；此处就近覆盖仅作用于 web/ 子树。"
+}

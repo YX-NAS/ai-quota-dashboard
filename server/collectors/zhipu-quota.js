@@ -13,8 +13,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const crypto = require('node:crypto');
-const https = require('node:https');
+const { getJson } = require('../lib/http-json');
+const { decryptZcodeValue } = require('../lib/zcode-credential');
 const plansStore = require('../lib/plans');
 
 const HOST = 'open.bigmodel.cn';
@@ -25,21 +25,8 @@ const WB_MODELS = path.join(os.homedir(), '.workbuddy-ai', 'models.json');
 const CTX_CACHE_FILE = path.join(__dirname, '..', '..', 'config', '.zhipu-team-context.json');
 const CTX_TTL = 10 * 60_000;
 
-// ---------- ZCode 凭证解密（enc:v1:iv.tag.ciphertext，AES-256-GCM） ----------
-function decryptZcodeValue(v) {
-  if (typeof v !== 'string' || !v.startsWith('enc:v1:')) return v;
-  try {
-    const [iv, tag, ct] = v.slice(7).split('.');
-    const secret = process.env.ZCODE_CREDENTIAL_SECRET
-      || `zcode-credential-fallback:${os.platform()}:${os.homedir()}:${os.userInfo().username}`;
-    const key = crypto.createHash('sha256').update(secret).digest();
-    const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'));
-    d.setAuthTag(Buffer.from(tag, 'base64url'));
-    return Buffer.concat([d.update(Buffer.from(ct, 'base64url')), d.final()]).toString('utf8');
-  } catch {
-    return null;
-  }
-}
+// ---------- ZCode 凭证解密 ----------
+// enc:v1 AES-256-GCM 实现已抽到 server/lib/zcode-credential.js（与 api-billing.js 共用）
 
 function getCredentials() {
   const out = { configured: { token: null, org: null, proj: null }, oauth: null, apiKeys: [] };
@@ -72,21 +59,12 @@ function getCredentials() {
 }
 
 // ---------- HTTP ----------
+// 实现移到 server/lib/http-json.js 的 getJson（[P1] 体超限先 resolve 再 destroy 修悬挂；
+// 非 200 reason 带脱敏后的响应体片段，本采集器对外契约仍是 { ok, data?, reason? }）。
+// 注：本采集器有自己的双层缓存（内存 ctxCache + 落盘 CTX_CACHE_FILE，键为 org/project 对），
+// 与 http-json 无关，保持原样。
 function get(pathWithQuery, headers, timeoutMs = 10_000) {
-  return new Promise((resolve) => {
-    const req = https.request({ hostname: HOST, path: pathWithQuery, method: 'GET', timeout: timeoutMs, headers }, (res) => {
-      let buf = '';
-      res.on('data', c => { buf += c; if (buf.length > 256 * 1024) req.destroy(); });
-      res.on('end', () => {
-        if (res.statusCode !== 200) return resolve({ ok: false, reason: 'HTTP ' + res.statusCode });
-        try { resolve({ ok: true, data: JSON.parse(buf) }); }
-        catch { resolve({ ok: false, reason: 'bad json' }); }
-      });
-    });
-    req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'timeout' }); });
-    req.on('error', e => resolve({ ok: false, reason: e.message }));
-    req.end();
-  });
+  return getJson('https://' + HOST + pathWithQuery, { headers, timeoutMs });
 }
 
 // ---------- 团队 org/project 发现 ----------
@@ -185,8 +163,8 @@ async function collect() {
       const r = await fetchQuotaRaw(auth, ctx);
       if (r.error) { lastErr = r.error; continue; }
       if (r.data && Array.isArray(r.data.limits) && r.data.limits.length) { result = r.data; break; }
-      lastErr = '空额度'; // 项目无有效订阅，换下一个项目
-      break;
+      lastErr = '空额度'; // 项目无有效订阅：同项目其余凭证再试（原 break 会直接弃掉整个项目）；全空才换下一项目
+      continue;
     }
     if (!result) continue;
     const { fiveHour, weekly } = parseQuotaLimits(result.limits);

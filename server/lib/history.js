@@ -16,7 +16,11 @@ const SCHEMA_VERSION = '1';
 let db = null;
 
 // AI_QUOTA_HISTORY=0：完全不打开也不写库，纯内存路径回归 v1.4 行为
+// AI_QUOTA_HISTORY=readonly：v1.7 云端只读模式 —— 归档库以 SQLite readOnly 打开（可 merge/回读，
+// 永不写、不建表、不产生 WAL）。Mac 采集端 rsync 覆盖式推送的归档文件在云端只消费不触碰：
+// 既根除「云端服务写入 × 同步覆盖」的文件竞态，也保证云端零写入面（配合凭据不落云 = 零密钥上云）。
 const enabled = () => process.env.AI_QUOTA_HISTORY !== '0';
+const readOnly = () => process.env.AI_QUOTA_HISTORY === 'readonly';
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS daily (
@@ -34,6 +38,15 @@ CREATE TABLE IF NOT EXISTS daily_model (
   cache_read_tokens INTEGER, cache_creation_tokens INTEGER,
   cost_usd REAL, cost_cny REAL, equivalent_cny REAL, updated_at INTEGER,
   PRIMARY KEY (date, tool, model)
+);
+CREATE TABLE IF NOT EXISTS daily_network (
+  date TEXT NOT NULL, network TEXT NOT NULL, label TEXT,
+  rx_bytes INTEGER, tx_bytes INTEGER, updated_at INTEGER,
+  PRIMARY KEY (date, network)
+);
+CREATE TABLE IF NOT EXISTS daily_vpn (
+  date TEXT PRIMARY KEY, used_bytes INTEGER, total_bytes INTEGER,
+  expire_at INTEGER, updated_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `;
@@ -55,9 +68,19 @@ function setJournalMode(conn, mode) {
 }
 
 // 打开归档库：WAL 优先，失败降级 journal DELETE，再失败返回 null（调用方降级为纯内存）
+// readonly 模式：以 SQLite 官方只读标志打开（不建表、不产生 WAL），供云端「归档只读消费」部署
 function open(dbPath = DB_PATH) {
   if (!enabled()) return null;
   if (db) return db;
+  if (readOnly()) {
+    try {
+      // 文件不存在时只读模式会失败 → 返回 null，merge/sync 调用方各自降级（不建空库）
+      if (!fs.existsSync(dbPath)) return null;
+      const conn = new DatabaseSync(dbPath, { readOnly: true });
+      db = conn;
+      return db;
+    } catch { return null; }
+  }
   let conn = null;
   try {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -109,7 +132,7 @@ function fpHash(str) {
 // 内容指纹未变的行跳过（见 fpCache），全脏首写不受影响。
 // 只存 per-tool / per-model 行，不存 __total——合并时重算，避免双算
 function syncFromAgg(agg) {
-  if (!enabled()) return false; // 显式关闭：静默直通，回归 v1.4 纯内存路径
+  if (!enabled() || readOnly()) return false; // 显式关闭或云端只读模式：静默直通，不写库
   const conn = open();
   // 坏库等打开失败：抛给调用方记 collectorErrors.history（用户可见），绝不静默丢归档
   if (!conn) throw new Error('history.sqlite 打开失败');
@@ -186,12 +209,61 @@ function syncFromAgg(agg) {
     try { conn.exec('ROLLBACK'); } catch { /* 已回滚或连接已坏 */ }
     try { conn.close(); } catch { /* 尽力关闭 */ }
     if (db === conn) db = null; // 连接可能已坏：丢弃单例，下次重开
+    // close 后库可能被外部替换/损坏：指纹必须失效，下一轮按全量脏重写（宁重写不漏写）
+    fpCache.clear();
     throw e;
   }
 }
 
 // 最近一次 syncFromAgg 的行统计：{ rows, written, skipped }（只读快照）
 function syncStats() { return Object.assign({}, fpStats); }
+
+// —— 网络流量归档（daily_network）——
+// 与 syncFromAgg 的「全量 UPSERT + 指纹跳过」不同：采集器给出的是累计计数器差分（增量本身），
+// 这里用 SQL 累加 UPSERT（rx=rx+excluded.rx）。差分由 network-state.json 的计数器基线保证
+// 不重不漏，多进程（index.js / mcp.js）各自差分各自的增量，累加语义天然正确。
+function syncNetworkDaily(entries) {
+  if (!enabled() || readOnly()) return false;
+  const conn = open();
+  if (!conn) throw new Error('history.sqlite 打开失败');
+  if (!Array.isArray(entries) || !entries.length) return false;
+  const now = Date.now();
+  const up = conn.prepare(`
+    INSERT INTO daily_network (date, network, label, rx_bytes, tx_bytes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date, network) DO UPDATE SET
+      rx_bytes=rx_bytes+excluded.rx_bytes, tx_bytes=tx_bytes+excluded.tx_bytes,
+      label=excluded.label, updated_at=excluded.updated_at`);
+  conn.exec('BEGIN');
+  try {
+    for (const e of entries) {
+      if (!e || typeof e.network !== 'string' || !e.network) continue;
+      up.run(String(e.date || ''), e.network, String(e.label || e.network),
+        Math.max(0, Math.round(e.rxBytes || 0)), Math.max(0, Math.round(e.txBytes || 0)), now);
+    }
+    conn.exec('COMMIT');
+    return true;
+  } catch (e) {
+    try { conn.exec('ROLLBACK'); } catch { /* 已回滚或连接已坏 */ }
+    try { conn.close(); } catch { /* 尽力关闭 */ }
+    if (db === conn) db = null;
+    throw e;
+  }
+}
+
+// 近 N 天的网络流量日序列（北京时端口径）：[{date, network, label, rx, tx}]，按日期+网络排序。
+// 读路径不致命：任何失败返回 []（调用方据此隐藏网络区块，不报错）。
+function networkDaily(days = 30) {
+  if (!enabled()) return [];
+  try {
+    const conn = open();
+    if (!conn) return [];
+    const cutoff = new Date(Date.now() + 8 * 3600e3 - (Math.max(1, days) - 1) * 86400e3).toISOString().slice(0, 10);
+    return conn.prepare(`
+      SELECT date, network, label, SUM(rx_bytes) AS rx, SUM(tx_bytes) AS tx
+      FROM daily_network WHERE date >= ? GROUP BY date, network ORDER BY date, network`).all(cutoff);
+  } catch { return []; }
+}
 
 // 按当前单价表重估一组 token 的等价成本（纯计算，不触碰归档值）
 // 缺单价的模型金额记 0、保留 token，与 raw 口径一致（页面本就标注「无单价」）
@@ -278,8 +350,9 @@ function archFullModelBucket(model, s, pricer) {
     reasoningTokens: 0, // daily_model 无 reasoning 列，补缺行记 0
     cacheReadTokens: s.cacheReadTokens,
     cacheCreationTokens: s.cacheCreationTokens,
-    costUsd: 0,
-    costCny: 0,
+    // 实扣 cost_usd（Codex 等）保留归档累计原值、人民币按当前汇率折算——与 daily 补缺（archToolAgg）同口径
+    costUsd: s.costUsd || 0,
+    costCny: (s.costUsd || 0) * pricer.fx,
     equivalentCny: rp.cny,
   };
   if (rp.noPrice) out.noPrice = true;
@@ -319,7 +392,8 @@ function mergeArchived(daily, models, pricer) {
       SUM(COALESCE(input_tokens, 0)) AS input_tokens,
       SUM(COALESCE(output_tokens, 0)) AS output_tokens,
       SUM(COALESCE(cache_read_tokens, 0)) AS cache_read_tokens,
-      SUM(COALESCE(cache_creation_tokens, 0)) AS cache_creation_tokens
+      SUM(COALESCE(cache_creation_tokens, 0)) AS cache_creation_tokens,
+      SUM(COALESCE(cost_usd, 0)) AS cost_usd
     FROM daily_model GROUP BY tool, model`).all();
 
   const archTool = new Map();  // date -> Map(tool -> daily 行)
@@ -376,6 +450,7 @@ function mergeArchived(daily, models, pricer) {
       outputTokens: r.output_tokens,
       cacheReadTokens: r.cache_read_tokens,
       cacheCreationTokens: r.cache_creation_tokens,
+      costUsd: r.cost_usd || 0,
     });
   }
   for (const [tool, t0] of archAgg) {
@@ -396,4 +471,71 @@ function mergeArchived(daily, models, pricer) {
   return { daily: outDaily, dailyKeys: Object.keys(outDaily).sort(), models: outModels };
 }
 
-module.exports = { open, close, ensureSchema, syncFromAgg, syncStats, mergeArchived, DB_PATH };
+// VPN 流量包日增量归档（daily_vpn）：采集器给出「本轮累计已用差值」，同一天累加。
+// total/expire 每次覆盖为最新（面板端可能续订变更）。delta<=0 直通不写（首采基线轮 / 计数器重置）。
+function syncVpnDaily({ date, deltaBytes, totalBytes, expireAt }) {
+  if (!enabled() || readOnly()) return false;
+  const conn = open();
+  if (!conn) throw new Error('history.sqlite 打开失败');
+  if (!date || !(deltaBytes > 0)) return false;
+  const now = Date.now();
+  conn.exec('BEGIN');
+  try {
+    conn.prepare(`
+      INSERT INTO daily_vpn (date, used_bytes, total_bytes, expire_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(date) DO UPDATE SET
+        used_bytes=used_bytes+excluded.used_bytes,
+        total_bytes=COALESCE(excluded.total_bytes, daily_vpn.total_bytes),
+        expire_at=COALESCE(excluded.expire_at, daily_vpn.expire_at),
+        updated_at=excluded.updated_at`)
+      .run(date, Math.round(deltaBytes), totalBytes > 0 ? Math.round(totalBytes) : null,
+        expireAt > 0 ? Math.round(expireAt) : null, now);
+    conn.exec('COMMIT');
+    return true;
+  } catch (e) {
+    try { conn.exec('ROLLBACK'); } catch { /* 已回滚 */ }
+    try { conn.close(); } catch { /* 尽力 */ }
+    if (db === conn) db = null;
+    throw e;
+  }
+}
+
+// 近 N 天 VPN 每日用量序列（北京时间口径）：[{date, used_bytes, total_bytes, expire_at}]。
+// 读路径不致命：任何失败返回 []。
+function vpnDaily(days = 31) {
+  if (!enabled()) return [];
+  try {
+    const conn = open();
+    if (!conn) return [];
+    const cutoff = new Date(Date.now() + 8 * 3600e3 - (Math.max(1, days) - 1) * 86400e3).toISOString().slice(0, 10);
+    return conn.prepare(
+      `SELECT date, used_bytes, total_bytes, expire_at FROM daily_vpn WHERE date >= ? ORDER BY date`).all(cutoff);
+  } catch { return []; }
+}
+
+// 最近一条 VPN 日行（date 最大）：云端只读部署时 VPN 采集器不可用（密钥不落云），
+// snapshot 用它 + 同步过去的 vpn-state.json 基线兜底渲染流量包卡（archived:true 标记数据截至同步点）。
+function vpnLatest() {
+  if (!enabled()) return null;
+  try {
+    const conn = open();
+    if (!conn) return null;
+    return conn.prepare('SELECT date, used_bytes, total_bytes, expire_at FROM daily_vpn ORDER BY date DESC LIMIT 1').get() || null;
+  } catch { return null; }
+}
+
+// 全历史出现过的模型名（daily_model 去重；供「缺失单价自动补充」圈定范围）。
+// 归档关闭/库不可读时返回空数组（调用方据此跳过补充，不报错）。
+function distinctModels() {
+  if (!enabled()) return [];
+  try {
+    const conn = open();
+    if (!conn) return [];
+    return conn.prepare('SELECT DISTINCT model FROM daily_model').all()
+      .map(r => r.model).filter(m => typeof m === 'string' && m);
+  } catch { return []; }
+}
+
+module.exports = { open, close, ensureSchema, syncFromAgg, syncStats, mergeArchived, distinctModels,
+  syncNetworkDaily, networkDaily, syncVpnDaily, vpnDaily, vpnLatest, readOnly, DB_PATH };

@@ -11,12 +11,24 @@
 //     因此「当日目标成本」横幅、昨日同期对比都能呈现出真实感。
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { DEFAULT_PRICING } = require(path.join(__dirname, '..', 'server', 'lib', 'pricing'));
 
 const target = process.argv[2];
 if (!target) { console.error('用法: node scripts/gen-demo-data.js <目标HOME目录>'); process.exit(1); }
+// rmSync 守护（脚本以 recursive 强删开头，参数手滑就是灾难）：目标绝不允许是
+// /、家目录、当前工作目录或它们的祖先目录（相对路径先转绝对再比对）
+const tAbs = path.resolve(target);
+const tNorm = (tAbs.replace(/[\\/]+$/, '') || '/');
+const dangerList = [path.parse(tAbs).root, path.resolve(os.homedir()), process.cwd()]
+  .map(p => (p.replace(/[\\/]+$/, '') || '/'));
+if (dangerList.some(d => tNorm === d || (d + '/').startsWith(tNorm + '/'))) {
+  console.error(`[demo] 拒绝删除危险目录: ${tAbs}`);
+  console.error('[demo] 目标不得为 /、家目录、当前工作目录或它们的祖先目录');
+  process.exit(1);
+}
 fs.rmSync(target, { recursive: true, force: true });
 
 const FX = 7.2;

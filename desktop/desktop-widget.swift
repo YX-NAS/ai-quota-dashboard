@@ -40,18 +40,39 @@ struct QuotaWindow { var usedPercent: Int?; var resetMsLeft: Double? }
 struct PlanQuota {
     var provider = ""
     var shortName = ""
+    var costText = ""            // 月费标注（$19.9/月·≈¥143 / ¥119/月）
     var fiveHour = QuotaWindow(); var weekly = QuotaWindow()
+}
+// 按量服务商行（与网页「按量统计」区对齐：今日/本月费用 + 余额 + Key 健康）
+struct PaygRowData {
+    var id = ""                  // providerId 作稳定 id（两个同厂商 provider 的短名会重复，不能用 label）
+    var label = ""
+    var todayCny = 0.0, monthCny = 0.0
+    var reqs = 0
+    var balText = "—"            // 余额短文案：¥6380 / 未充值 / 需配AK / 未配
+    var keyOk: Bool? = nil       // nil = 未探测
 }
 struct WidgetData {
     var ok = false
     var req = 0, tok = 0
     var cny = 0.0, payUsd = 0.0
     var quotas: [PlanQuota] = []
+    var payg: [PaygRowData] = []
+    var paygToday = 0.0          // 按量服务商今日费用合计
     var fetchedAt = Date.distantPast
     var collapsed = false
     var goalCny = 0.0   // 今日产出目标 ¥
     var goalPct = 0.0
     var weekCny = 0.0   // 本周（周一起）等价成本
+    // 网络流量（与网页「网络流量」卡对齐：当前网络 + 今日上下行 + 每日目标进度条）
+    var netLabel = ""
+    var netRx = 0.0, netTx = 0.0            // 今日字节
+    var netRxRate = 0.0, netTxRate = 0.0    // 实时速率（字节/秒，本轮差值口径）
+    var netGoalBytes = 0.0, netPct = 0.0    // 0 = 未配目标（不画进度条）
+    // VPN 流量包（对齐网页「套餐统计」VPN 卡：订阅计量，服务端账单；-1 = 不可用整行隐藏）
+    var vpnPct = -1.0
+    var vpnRemaining = 0.0, vpnToday = 0.0  // 字节
+    var vpnDaysLeft = -1                    // -1 = 无到期信息
 }
 func bjWeekStart() -> String {
     var cal = Calendar(identifier: .iso8601)
@@ -82,8 +103,14 @@ func bjToday() -> String {
     return f.string(from: Date())
 }
 
+// 拉一次 /api/summary 组装卡片数据（内部 6s 超时兜底）。
+// 并发交接说明：sem.wait 超时返回后，URLSession 回调线程仍可能迟到执行——out 被逃逸闭包按引用
+// 捕获，若回调直接改写 out 会与调用线程 return 时的结构体拷贝构成无同步数据竞争（撕裂读风险）。
+// 因此回调先在局部变量 r 装好完整结果，最后在锁内一次性交给 out；调用线程也在锁内读出快照。
+// 超时后迟到的回调只会安全地写一个即将被丢弃的局部箱，主路径（reload 的异步包装）语义不变。
 func fetchWidgetData() -> WidgetData {
     var out = WidgetData()
+    let lock = NSLock()
     let sem = DispatchSemaphore(value: 0)
     let u = URL(string: "http://127.0.0.1:\(serverPort())/api/summary?days=8")!
     URLSession.shared.dataTask(with: u) { data, _, _ in
@@ -92,14 +119,16 @@ func fetchWidgetData() -> WidgetData {
               let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
               let agg = obj["agg"] as? [String: Any],
               let daily = agg["daily"] as? [String: Any] else { return }
+        var r = WidgetData()
         if let dayRaw = daily[bjToday()] as? [String: Any],
            let total = dayRaw["__total"] as? [String: Any] {
             let t = UsageAgg(total)
-            out.req = t.requests
-            out.tok = t.inputTokens + t.outputTokens
-            out.cny = t.costCny + t.equivalentCny
-            for (_, v) in dayRaw {
-                if let vd = v as? [String: Any] { out.payUsd += UsageAgg(vd).payUsd }
+            r.req = t.requests
+            r.tok = t.inputTokens + t.outputTokens
+            r.cny = t.costCny + t.equivalentCny
+            // payUsd 只累加各工具桶；__total 已是各工具之和，跳过避免双计（与 widget.ps1 同口径）
+            for (k, v) in dayRaw where k != "__total" {
+                if let vd = v as? [String: Any] { r.payUsd += UsageAgg(vd).payUsd }
             }
         }
         // 本周合计（北京 ISO 周一起）
@@ -107,32 +136,135 @@ func fetchWidgetData() -> WidgetData {
         for (k, v) in daily {
             guard k >= monday, let vd = v as? [String: Any], let tot = vd["__total"] as? [String: Any] else { continue }
             let a = UsageAgg(tot)
-            out.weekCny += a.costCny + a.equivalentCny
+            r.weekCny += a.costCny + a.equivalentCny
         }
-        for (key, short) in [("chatgptQuota", "ChatGPT"), ("minimaxQuota", "MiniMax"), ("zhipuQuota", "智谱")] {
+        // 套餐月费文案（USD 真实订阅价优先，附 ¥ 折算；否则用等价月额度）
+        let plansObj = obj["plans"] as? [String: Any]
+        let plansPlans = plansObj?["plans"] as? [String: Any]
+        let fx = ((plansObj?["usdCnyRate"] as? NSNumber)?.doubleValue ?? 7.2)
+        func costText(_ toolKey: String) -> String {
+            guard let p = plansPlans?[toolKey] as? [String: Any] else { return "" }
+            if let u = (p["usdPerMonth"] as? NSNumber)?.doubleValue, u > 0 {
+                return String(format: "$%.1f/月 · ≈¥%.0f", u, u * fx)
+            }
+            if let c = (p["cnyPerMonth"] as? NSNumber)?.doubleValue, c > 0 {
+                return String(format: "¥%.0f/月", c)
+            }
+            return ""
+        }
+        let shortToolMap = [("chatgptQuota", "ChatGPT", "codex"), ("minimaxQuota", "MiniMax", "workbuddy"), ("zhipuQuota", "智谱", "")]
+        for (key, short, toolKey) in shortToolMap {
             guard let q = obj[key] as? [String: Any], (q["available"] as? Bool) == true else { continue }
             var pq = PlanQuota()
             pq.provider = (q["provider"] as? String) ?? short
             pq.shortName = short
+            pq.costText = toolKey.isEmpty ? "" : costText(toolKey)
             if let fh = q["fiveHour"] as? [String: Any] {
-                pq.fiveHour = QuotaWindow(usedPercent: fh["usedPercent"] as? Int, resetMsLeft: fh["resetMsLeft"] as? Double)
+                pq.fiveHour = QuotaWindow(usedPercent: (fh["usedPercent"] as? NSNumber)?.intValue, resetMsLeft: (fh["resetMsLeft"] as? NSNumber)?.doubleValue)
             }
             if let wk = q["weekly"] as? [String: Any] {
-                pq.weekly = QuotaWindow(usedPercent: wk["usedPercent"] as? Int, resetMsLeft: wk["resetMsLeft"] as? Double)
+                pq.weekly = QuotaWindow(usedPercent: (wk["usedPercent"] as? NSNumber)?.intValue, resetMsLeft: (wk["resetMsLeft"] as? NSNumber)?.doubleValue)
             }
-            out.quotas.append(pq)
+            r.quotas.append(pq)
+        }
+        // 按量服务商行：apiBilling.providers(payg) × vendors 费用桶 × apiBilling[vendor] 余额 × keyChecks
+        if let ab = obj["apiBilling"] as? [String: Any],
+           let provs = ab["providers"] as? [[String: Any]] {
+            let vends = obj["vendors"] as? [String: Any] ?? [:]
+            let kcs = ab["keyChecks"] as? [String: Any] ?? [:]
+            func balText(_ vendor: String, _ q: [String: Any]?) -> String {
+                guard let q = q, (q["available"] as? Bool) == true else {
+                    if vendor == "bailian" { return "需配AK" }
+                    return (q?["notConfigured"] as? Bool) == true ? "未配key" : "—"
+                }
+                if vendor == "zhipu", let ac = q["account"] as? [String: Any] {
+                    let b = (ac["availableBalance"] as? NSNumber) ?? (ac["balance"] as? NSNumber)
+                    return b != nil ? String(format: "¥%.0f", b!.doubleValue) : "未充值"
+                }
+                if let bal = q["balance"] as? [String: Any], let t = (bal["total"] as? NSNumber)?.doubleValue {
+                    return String(format: "¥%.0f", t)
+                }
+                return "—"
+            }
+            for p in provs {
+                guard (p["billingKind"] as? String) != "subscription" else { continue }
+                let vendor = (p["vendor"] as? String) ?? ""
+                guard !vendor.isEmpty else { continue }
+                var row = PaygRowData()
+                row.id = (p["providerId"] as? String) ?? vendor
+                row.label = shortVendor(vendor, (p["label"] as? String) ?? vendor)
+                if let pid = p["providerId"] as? String, let kk = kcs[pid] as? [String: Any] {
+                    row.keyOk = (kk["ok"] as? Bool) ?? false
+                }
+                if let vv = vends[vendor] as? [String: Any] {
+                    if let t = vv["today"] as? [String: Any] {
+                        row.todayCny = (t["costCny"] as? NSNumber)?.doubleValue ?? 0
+                        row.reqs = (t["requests"] as? NSNumber)?.intValue ?? 0
+                    }
+                    if let m = vv["month"] as? [String: Any] {
+                        row.monthCny = (m["costCny"] as? NSNumber)?.doubleValue ?? 0
+                    }
+                }
+                row.balText = balText(vendor, ab[vendor] as? [String: Any])
+                r.payg.append(row)
+            }
+            // 智谱「其他 Key」行（与网页附加卡对齐）：健康圆点 + 名称，费用 0/仅探活
+            //（智谱标准 Key 无余额接口；linkedProvider 非空 = 已有 provider 卡的 key，跳过）
+            if let extras = ab["zhipuExtraKeys"] as? [[String: Any]] {
+                for x in extras where (x["linkedProvider"] as? String) == nil {
+                    var row = PaygRowData()
+                    row.id = "zhipu-extra-" + ((x["label"] as? String) ?? "")
+                    row.label = "智谱·" + ((x["label"] as? String) ?? "Key")
+                    row.keyOk = (x["checked"] as? Bool) == true ? ((x["ok"] as? Bool) ?? false) : nil
+                    row.balText = "仅探活"
+                    r.payg.append(row)
+                }
+            }
+            r.paygToday = r.payg.reduce(0) { $0 + $1.todayCny }
         }
         if let plans = obj["plans"] as? [String: Any],
            let goal = plans["dailyGoal"] as? [String: Any],
            let g = goal["cny"] as? Double, g > 0 {
-            out.goalCny = g
-            out.goalPct = min(out.cny / g * 100, 999)
+            r.goalCny = g
+            r.goalPct = min(r.cny / g * 100, 999)
         }
-        out.ok = true
-        out.fetchedAt = Date()
+        // 网络流量：snap.network.current（网络名）+ today（今日上下行字节）+ plans.dailyGoal.networkGB（目标）
+        // 键值宽松读取：字段缺失/服务旧版本 → 保持空，不显示该行（向后兼容）
+        if let nw = obj["network"] as? [String: Any],
+           let cur = nw["current"] as? [String: Any],
+           let label = cur["label"] as? String, !label.isEmpty {
+            r.netLabel = label
+            r.netRxRate = (cur["rxRate"] as? NSNumber)?.doubleValue ?? 0
+            r.netTxRate = (cur["txRate"] as? NSNumber)?.doubleValue ?? 0
+            if let t = nw["today"] as? [String: Any] {
+                r.netRx = (t["rx"] as? NSNumber)?.doubleValue ?? 0
+                r.netTx = (t["tx"] as? NSNumber)?.doubleValue ?? 0
+            }
+            let gb = ((obj["plans"] as? [String: Any])?["dailyGoal"] as? [String: Any])?["networkGB"] as? NSNumber
+            if let g = gb?.doubleValue, g > 0 {
+                r.netGoalBytes = g * 1024 * 1024 * 1024
+                r.netPct = (r.netRx + r.netTx) / r.netGoalBytes * 100
+            }
+        }
+        // VPN 流量包：snap.vpnQuota（订阅头计量）——available 才显示；未配置/采集失败保持隐藏，
+        // 旧版服务无该字段同样静默跳过（键值宽松读取，与网络行同规矩）
+        if let vq = obj["vpnQuota"] as? [String: Any], (vq["available"] as? Bool) == true,
+           let pct = (vq["usedPercent"] as? NSNumber)?.doubleValue, pct.isFinite {
+            r.vpnPct = pct
+            r.vpnRemaining = (vq["remainingBytes"] as? NSNumber)?.doubleValue ?? 0
+            r.vpnToday = (vq["todayBytes"] as? NSNumber)?.doubleValue ?? 0
+            let nowMs = Date().timeIntervalSince1970 * 1000
+            if let exp = (vq["expireAt"] as? NSNumber)?.doubleValue, exp > nowMs {
+                r.vpnDaysLeft = Int((exp - nowMs) / 86400000) // floor，与面板/网页「N 天后到期」同口径
+            }
+        }
+        r.ok = true
+        r.fetchedAt = Date()
+        lock.lock(); out = r; lock.unlock()
     }.resume()
     _ = sem.wait(timeout: .now() + 6)
-    return out
+    lock.lock(); let snapshot = out; lock.unlock()
+    return snapshot
 }
 
 // ---------- SwiftUI 界面 ----------
@@ -141,12 +273,31 @@ func fmtTok(_ v: Int) -> String {
     if Double(v) >= 1e4 { return String(format: "%.1f万", Double(v)/1e4) }
     return "\(v)"
 }
+// 字节流量格式化（1024 进制，与网页 fmtBytes 同口径）
+func fmtBytes(_ v: Double) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB"]
+    var x = abs(v); var i = 0
+    while x >= 1024 && i < units.count - 1 { x /= 1024; i += 1 }
+    return String(format: (i == 0 || x >= 100) ? "%.0f%@" : "%.1f%@", x, units[i])
+}
 func fmtReset(_ ms: Double?) -> String {
     guard let ms = ms, ms > 0 else { return "" }
     let h = Int(ms) / 3_600_000, m = Int(ms) % 3_600_000 / 60_000
     return h > 0 ? "\(h)h\(m)m" : "\(m)m"
 }
 func barColor(_ pct: Int) -> Color { pct > 85 ? .red : pct > 60 ? .yellow : .green }
+// 金额紧凑格式：<100 留分位，更大取整（卡片 262px 宽度约束）
+func fmtM(_ v: Double) -> String { v >= 100 ? String(format: "¥%.0f", v) : String(format: "¥%.2f", v) }
+// 服务商短名（与网页区对应，长中文描述截去括号部分）
+func shortVendor(_ vendor: String, _ label: String) -> String {
+    switch vendor {
+    case "zhipu": return "智谱"
+    case "deepseek": return "DeepSeek"
+    case "bailian": return "百炼"
+    case "moonshot": return "Kimi"
+    default: return String(label.split(separator: "（").first.map(Substring.init) ?? Substring(label))
+    }
+}
 
 struct Bar: View {
     let label: String; let pct: Int?; let reset: Double?
@@ -241,8 +392,8 @@ struct CardView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         AmountText(value: store.data.cny, size: 17)
-                        if store.data.payUsd > 0.005 {
-                            Text(String(format: "实扣 $%.2f", store.data.payUsd))
+                        if store.data.paygToday > 0.005 {
+                            Text(String(format: "按量 %@", fmtM(store.data.paygToday)))
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         } else {
@@ -279,12 +430,12 @@ struct CardView: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     AmountText(value: store.data.cny, size: 26)
-                    if store.data.payUsd > 0.005 {
-                        Text(String(format: "实扣 $%.2f", store.data.payUsd))
+                    if store.data.paygToday > 0.005 {
+                        Text(String(format: "按量 %@", fmtM(store.data.paygToday)))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                             .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     } else {
-                        Text("全部在套餐内").font(.system(size: 10)).foregroundStyle(.green)
+                        Text("今日全在套餐内").font(.system(size: 10)).foregroundStyle(.green)
                             .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                     }
                     Spacer()
@@ -295,13 +446,92 @@ struct CardView: View {
                 Text(String(format: "本周累计 ¥%.2f（周一起）", store.data.weekCny))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                     .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                // ---------- 按量统计（与网页区块对齐：今日 · 本月 · 余额，圆点=Key 健康） ----------
+                if !store.data.payg.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("按量 · 服务商").font(.system(size: 9, weight: .medium)).foregroundStyle(.tertiary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            Spacer()
+                            Text("今日 · 本月 · 余额").font(.system(size: 8)).foregroundStyle(.quaternary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        }
+                        ForEach(store.data.payg, id: \.id) { r in
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(r.keyOk == nil ? Color.secondary.opacity(0.35) : (r.keyOk == true ? Color.green : Color.red))
+                                    .frame(width: 4, height: 4)
+                                Text(r.label).font(.system(size: 10)).foregroundStyle(.secondary)
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                Spacer(minLength: 4)
+                                Text(fmtM(r.todayCny)).font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(r.todayCny >= 0.005 ? Color.primary : Color.secondary)
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                Text(fmtM(r.monthCny)).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                                Text(r.balText).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
+                    }
+                    .padding(.top, 3)
+                }
+                // ---------- 套餐统计（月费标注 + 5h/周额度条） ----------
                 ForEach(store.data.quotas, id: \.shortName) { q in
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(q.shortName).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        HStack(spacing: 5) {
+                            Text(q.shortName).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            if !q.costText.isEmpty {
+                                Text(q.costText).font(.system(size: 9)).foregroundStyle(.green)
+                                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            }
+                            Spacer()
+                        }
                         Bar(label: "5h", pct: q.fiveHour.usedPercent, reset: q.fiveHour.resetMsLeft)
                         Bar(label: "周", pct: q.weekly.usedPercent, reset: q.weekly.resetMsLeft)
                     }
+                    .padding(.top, 2)
+                }
+                // ---------- VPN 流量包（订阅计量服务端账单；未配置/采集失败整行隐藏，同网页 skip 口径） ----------
+                if store.data.vpnPct >= 0 {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("🔌 VPN 流量包").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        Bar(label: "流量包已用", pct: Int(min(store.data.vpnPct, 100)), reset: nil)
+                        Text(String(format: "剩余 %@ · 今日 %@", fmtBytes(store.data.vpnRemaining), fmtBytes(store.data.vpnToday))
+                            + (store.data.vpnDaysLeft >= 0
+                               ? String(format: " · %d 天后到期", store.data.vpnDaysLeft)
+                               : ""))
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .lineLimit(1).minimumScaleFactor(0.75).allowsTightening(true)
+                    }
+                    .padding(.top, 2)
+                }
+                // ---------- 网络流量（紧跟套餐额度条下方，与网页同位置同口径） ----------
+                if !store.data.netLabel.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Text("📶 " + store.data.netLabel).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                            Spacer()
+                        }
+                        if store.data.netGoalBytes > 0 {
+                            Bar(label: "每日流量目标", pct: Int(min(store.data.netPct, 100)), reset: nil)
+                        }
+                        Text(String(format: "今日 ↓%@ · ↑%@", fmtBytes(store.data.netRx), fmtBytes(store.data.netTx))
+                            + (store.data.netGoalBytes > 0
+                               ? String(format: " · 剩 %@", fmtBytes(max(store.data.netGoalBytes - store.data.netRx - store.data.netTx, 0)))
+                               : ""))
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
+                            .lineLimit(1).minimumScaleFactor(0.75).allowsTightening(true)
+                        if store.data.netRxRate > 1024 || store.data.netTxRate > 1024 {
+                            Text(String(format: "实时速率 ↓%@/s · ↑%@/s", fmtBytes(store.data.netRxRate), fmtBytes(store.data.netTxRate)))
+                                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+                                .lineLimit(1).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 2)
                 }
                 if store.data.goalCny > 0 {
                     VStack(alignment: .leading, spacing: 3) {
@@ -382,7 +612,8 @@ final class DataStore: ObservableObject {
     init() {
         data.collapsed = UserDefaults.standard.bool(forKey: collapseKey)
         reload()
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in self?.reload() }
+        // 120s：与「随时检测」语义对齐（服务端 60s 快照 + key 探活，卡片取最近一次）
+        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in self?.reload() }
     }
     func reload() {
         DispatchQueue.global().async {
@@ -425,7 +656,8 @@ final class WidgetAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        let collapsed = UserDefaults.standard.bool(forKey: "AIQuotaWidgetCollapsed")
+        var collapsed = UserDefaults.standard.bool(forKey: "AIQuotaWidgetCollapsed")
+        if let e = ProcessInfo.processInfo.environment["AI_QUOTA_WIDGET_COLLAPSED"] { collapsed = e == "1" }
         store.data.collapsed = collapsed
         let size = NSSize(width: Self.cardWidth, height: collapsed ? 120 : 280) // 初值，首帧布局后按上报高度校准
         // 拿不到主屏时用默认 frame 兜底（不强解崩溃）
@@ -484,6 +716,20 @@ final class WidgetAppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set("\(f.x),\(f.y)", forKey: self.positionKey)
         }
         window.makeKeyAndOrderFront(nil)
+
+        // 调试出图：AI_QUOTA_WIDGET_DUMP=<png路径> 时，等首帧数据就绪后把窗口内容缓存成 PNG 再退出
+        // （本机无屏幕录制权限，用视图自绘截图做视觉验证；host 已在 makeKeyAndOrderFront 挂好）
+        if let dumpPath = ProcessInfo.processInfo.environment["AI_QUOTA_WIDGET_DUMP"], !dumpPath.isEmpty {
+            func snap() {
+                guard let cv = self.window.contentView, cv.bounds.height > 60 else { return }
+                guard let rep = cv.bitmapImageRepForCachingDisplay(in: cv.bounds) else { return }
+                cv.cacheDisplay(in: cv.bounds, to: rep)
+                guard let png = rep.representation(using: .png, properties: [:]) else { return }
+                try? png.write(to: URL(fileURLWithPath: dumpPath))
+            }
+            // 折叠态窗口很矮，等数据回来（fetchWidgetData 6s 超时）后再连拍几帧
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { snap(); NSApp.terminate(nil) }
+        }
     }
 
     var isTop = false

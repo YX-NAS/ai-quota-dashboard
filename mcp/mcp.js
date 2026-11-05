@@ -7,15 +7,8 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const { version: VERSION } = require(path.join(ROOT, 'package.json'));
-const plansStore = require(path.join(ROOT, 'server', 'lib', 'plans'));
-const { makePricer } = require(path.join(ROOT, 'server', 'lib', 'pricing'));
-const { aggregate, compareYesterday } = require(path.join(ROOT, 'server', 'lib', 'store'));
-const history = require(path.join(ROOT, 'server', 'lib', 'history'));
+const { buildSnapshot } = require(path.join(ROOT, 'server', 'lib', 'snapshot'));
 const { buildReport } = require(path.join(ROOT, 'server', 'lib', 'report'));
-const zcode = require(path.join(ROOT, 'server', 'collectors', 'zcode'));
-const ccswitch = require(path.join(ROOT, 'server', 'collectors', 'ccswitch'));
-const workbuddy = require(path.join(ROOT, 'server', 'collectors', 'workbuddy'));
-const claudecode = require(path.join(ROOT, 'server', 'collectors', 'claudecode'));
 const chatgptQuota = require(path.join(ROOT, 'server', 'collectors', 'chatgpt-quota'));
 const minimaxQuota = require(path.join(ROOT, 'server', 'collectors', 'minimax-quota'));
 const zhipuQuota = require(path.join(ROOT, 'server', 'collectors', 'zhipu-quota'));
@@ -23,33 +16,13 @@ const zhipuQuota = require(path.join(ROOT, 'server', 'collectors', 'zhipu-quota'
 let snapshotCache = null;
 let quotaCache = { at: 0, chatgpt: null, minimax: null, zhipu: null };
 async function getSnapshot() {
-  // MCP 调用频率低，缓存 60s 足够
+  // 快照构建统一复用 server/lib/snapshot（与 web/API 完全同口径，消除两份手抄）。
+  // MCP 调用频率低，缓存 60s 足够。原 MCP 手抄版的「特有差异」已并入统一实现：
+  // 本文件只消费快照的 agg / plans / cmp / rowStats 字段；统一版为字段超集，
+  // 且 plans 为脱敏副本（quotaKeys/webhookUrl 出掩码）——MCP 用到的 dailyGoal、
+  // 工具月额度、汇率均为非机密字段，不受影响。
   if (snapshotCache && Date.now() - snapshotCache.builtAt < 60_000) return snapshotCache;
-  const plans = plansStore.load();
-  const pricer = makePricer(plans);
-  const [zc, cc, wb, clc] = [zcode.collect(), ccswitch.collect(), workbuddy.collect(), claudecode.collect()];
-  const rows = [...zc.rows, ...cc.rows, ...wb.rows, ...clc.rows].sort((a, b) => a.ts - b.ts);
-  const agg = aggregate(rows, pricer);
-  // 与 server/index.js buildSnapshot 同口径：聚合落归档 + 归档补缺合并，
-  // 保证 MCP 报表与 web/API 数字一致（原始日志轮转清理后历史不丢）。
-  // 归档库不可用（AI_QUOTA_HISTORY=0 / 坏库）时沿用 raw，不阻塞 MCP 响应。
-  try {
-    if (history.syncFromAgg(agg)) {
-      const merged = history.mergeArchived(agg.daily, agg.models, pricer);
-      if (merged) {
-        agg.daily = merged.daily;
-        agg.dailyKeys = merged.dailyKeys;
-        agg.models = merged.models;
-      }
-    }
-  } catch { /* 归档读写失败：降级 raw 口径 */ }
-  snapshotCache = {
-    builtAt: Date.now(),
-    plans,
-    agg,
-    cmp: compareYesterday(rows, pricer),
-    rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length },
-  };
+  snapshotCache = await buildSnapshot();
   return snapshotCache;
 }
 
@@ -232,9 +205,14 @@ async function callTool(name, args) {
   }
 
   if (name === 'ai_usage_report') {
-    // 周/月报：复用快照的 plans + agg，纯函数出 Markdown（含环比、工具榜、模型榜、预算节）
+    // 周/月报：复用快照的 plans + agg，纯函数出 Markdown（含环比、工具榜、模型榜、预算节）。
+    // offset 语义与 server /api/report 对齐：区间内原样生效，越界（负数/超上限/非法）一律钳 0——
+    // 旧实现钳到上限（10 年前），与 web 口径不一致
     const type = args.type === 'month' ? 'month' : 'week';
-    const offset = Math.max(0, Math.min(type === 'month' ? 120 : 520, Math.floor(Number(args.offset) || 0)));
+    const offsetRaw = Number(args.offset);
+    const maxOffset = type === 'month' ? 120 : 520;
+    const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 && offsetRaw <= maxOffset
+      ? Math.floor(offsetRaw) : 0;
     const r = buildReport(agg, plans, { type, offset });
     return { text: r.markdown };
   }
@@ -348,7 +326,7 @@ function main() {
       try { msg = JSON.parse(line); } catch { continue; }
       handleRpc(msg).then(out => {
         if (out) process.stdout.write(JSON.stringify(out) + '\n');
-      });
+      }).catch(() => {}); // 客户端提前关闭管道（EPIPE）等写失败不得让进程崩掉
     }
   });
   process.stdin.on('end', () => process.exit(0));

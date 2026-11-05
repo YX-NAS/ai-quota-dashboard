@@ -3,10 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <title>AI 工具额度看板</title>
+<script>
+/* 首帧前定主题（防闪白/闪黑）：localStorage 用户选择 > 系统外观偏好 > 夜间；app.js 只负责切换 */
+var t = null;
+try { t = localStorage.getItem('aqd:theme'); } catch (e) { /* localStorage 不可用（隐私模式等）：跳过，仍查系统偏好 */ }
+if (t !== 'light' && t !== 'dark') {
+  try { t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'; }
+  catch (e) { t = 'dark'; } /* matchMedia 不可用：落回默认夜间（与 CSS :root 默认一致） */
+}
+document.documentElement.dataset.theme = t;
+</script>
 <link rel="icon" type="image/png" href="/favicon.png">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=20261105c">
 </head>
 <body class="anim-once">
 <div class="drag-ghost" id="dragGhost"></div>
@@ -22,7 +32,23 @@
       <div class="sub"><span class="live-dot"></span>数据源：本机 <code>~/.zcode</code> · <code>~/.cc-switch</code> · <code>~/.workbuddy-ai</code> · <code>~/.claude</code> · 只读 · 每 60s 刷新 · <span id="updatedAt"></span> · 卡片可拖拽排序</div>
     </div>
   </div>
-  <button id="settingsBtn" class="btn">设置</button>
+  <div class="topbar-actions">
+    <div class="notify-wrap">
+      <button id="notifyBtn" class="btn icon-btn" title="站内通知（价格更新 / 额度预警）">🔔<span id="notifyBadge" class="notify-badge" hidden></span></button>
+      <div id="notifyPanel" class="notify-panel glass" hidden>
+        <div class="notify-head"><b>通知</b>
+          <span class="notify-actions">
+            <button id="notifyReadAll" class="seg" title="标记全部为已读">全部已读</button>
+            <button id="notifyClear" class="seg" title="清空全部通知">清空</button>
+          </span>
+        </div>
+        <div id="notifyList" class="notify-list"></div>
+      </div>
+    </div>
+    <button id="refreshBtn" class="btn" title="立即重新扫描本机数据并强制重建快照（平时每 60s 自动刷新）">⟳ 刷新</button>
+    <button id="themeBtn" class="btn icon-btn" title="切换日间 / 夜间主题"></button>
+    <button id="settingsBtn" class="btn">设置</button>
+  </div>
 </header>
 
 <div id="errBanner" class="err-banner" hidden>
@@ -36,10 +62,43 @@
 
 <div class="kpis" id="kpis"></div>
 <div class="cards" id="cards"></div>
+<div id="cardsAux"></div><!-- 提示/折叠条独立于卡片网格：避免占格或阻止 auto-fit 折叠空轨道 -->
+
+<section id="planValueSec">
+  <h2>套餐性价比（实付月费 vs 等价 API 消耗 · 购买参考）</h2>
+  <div class="cards" id="planValueCards"></div>
+</section>
 
 <section>
-  <h2>套餐实时额度（5 小时 / 周窗口）</h2>
+  <h2>套餐统计（订阅月费 · 实时额度）</h2>
   <div class="cards" id="quotaCards"></div>
+</section>
+
+<section id="networkSec">
+  <h2>网络流量（当前网络 · 每日目标）</h2>
+  <div class="cards" id="networkNow"></div>
+</section>
+
+<section>
+  <h2>按量统计（服务商余额 · 用量费用 · Key 检测）</h2>
+  <div class="cards" id="billingCards"></div>
+</section>
+
+<section>
+  <h2>今日模型排行（使用量 · 费用 · 占比）</h2>
+  <div class="cards" id="modelRankCards"></div>
+</section>
+
+<section>
+  <h2>项目统计（今日占比与费用 · 累计总量）</h2>
+  <div class="cards" id="projectCards"></div>
+</section>
+
+<section id="apiCosts">
+  <h2>API 维度费用（每把 API × 模型 · 今日 / 本月）
+    <span class="seg"><button id="exportApiCsv" title="导出 API 维度费用 CSV">导出 CSV</button></span>
+  </h2>
+  <div class="table-wrap"><table id="apiTable"></table></div>
 </section>
 
 <section>
@@ -52,6 +111,11 @@
 <section id="chart">
   <h2>每日成本趋势（近 30 天）</h2>
   <div id="chartBox"></div>
+</section>
+
+<section id="networkTrendSec">
+  <h2>网络流量趋势（近 30 天）</h2>
+  <div id="networkChartBox"></div>
 </section>
 
 <section id="reportBox">
@@ -102,6 +166,6 @@
   </div>
 </dialog>
 
-<script src="/app.js"></script>
+<script type="module" src="/js/main.js?v=20261105c"></script>
 </body>
 </html>

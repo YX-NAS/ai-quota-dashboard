@@ -5,6 +5,9 @@ import Cocoa
 import Foundation
 
 // 看板端口发现：① 环境变量 AI_QUOTA_PORT ② 仓库根 config/.port（bundlePath 上跳两级）③ 默认 7788，启动读一次后缓存
+// 运行前提：app 需留在仓库内（AIQuota.app 就在 menubar/ 下，上跳两级即仓库根）。
+// 把 app 拷去 /Applications 等仓库外位置后，../../config/.port 不存在，自动回退默认 7788；
+// 端口非 7788 时请用环境变量 AI_QUOTA_PORT 显式指定。
 func serverPort() -> Int {
     enum PortCache { static var port = 0 }
     if PortCache.port > 0 { return PortCache.port }
@@ -49,14 +52,18 @@ struct DayFetchResult {
 }
 
 // 解析 /api/summary：当日各工具明细 + 本周合计 + 昨日同期 + 当日目标（纯函数，可后台线程调用）
+// 注意：agg.daily 只含有数据的日期。今天还没有首次请求时 daily 里没有今天的 key——
+// 这是「空日」不是「服务失联」，返回空结果（tools 为空、今日 0 请求），周/月聚合照常从
+// daily 其余日期累计；返回 nil 只留给网络失败 / JSON 解析失败（上层会走失联自愈路径）。
 func parseSummary(_ d: Data, date: String) -> DayFetchResult? {
     guard let obj = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
           let agg = obj["agg"] as? [String: Any],
-          let daily = agg["daily"] as? [String: Any],
-          let dayRaw = daily[date] as? [String: Any] else { return nil }
+          let daily = agg["daily"] as? [String: Any] else { return nil }
     var r = DayFetchResult()
-    for (k, v) in dayRaw {
-        if let vd = v as? [String: Any] { r.tools[k] = UsageAgg(vd) }
+    if let dayRaw = daily[date] as? [String: Any] {
+        for (k, v) in dayRaw {
+            if let vd = v as? [String: Any] { r.tools[k] = UsageAgg(vd) }
+        }
     }
     // 本周合计（北京 ISO 周一起）
     let monday = bjWeekStart()
@@ -356,6 +363,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 服务冷启动约 30s，重试窗口给到 90s；仍失败则通知用户手动处理，避免每次双击 app 都要记得先跑脚本。
     func recoverFromServiceDown() {
         if recoveryAttempts == 0 {
+            // repoRoot 与 serverPort() 的 .port 定位同源：依赖 app 留在仓库内（bundlePath 上跳两级）。
+            // app 被移出仓库后这里会得到错误目录，自愈 cd/node 拉起会失败（pgrep 保证不会误伤已运行的服务），
+            // 此时 90s 重试窗口结束后会发「看板服务未响应」通知，用户需手动在仓库目录运行 ./start-all.sh。
             let repoRoot = ((Bundle.main.bundlePath as NSString).appendingPathComponent("../..") as NSString).standardizingPath
             // login shell（-l）拿用户 PATH 里的 node（GUI 进程默认 PATH 不含 homebrew）；pgrep 保证不重复拉起
             let script = "pgrep -f 'server/index.js' >/dev/null && exit 0; cd '\(repoRoot)' && nohup node server/index.js > /tmp/ai-quota-server.log 2>&1 &"
@@ -401,7 +411,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 全局可变量只在主线程写（本闭包已在主队列）
             weekCny = result.weekCny
             ySameCny = result.ySameCny
-            if result.todayGoalCny > 0 { todayGoalCny = result.todayGoalCny }
+            // 无条件赋值：parseSummary 只在 g>0 时才填 todayGoalCny，服务端把目标清 0/删除后这里自然归零
+            todayGoalCny = result.todayGoalCny
             var rows: [(String, Int, Int, Double)] = []
             var totReq = 0, totTok = 0
             var totCny = 0.0

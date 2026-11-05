@@ -7,6 +7,7 @@
 //   成本口径：daily[date][tool] 的 costCny + equivalentCny（F1 归档合并后 daily 已含历史日）。
 
 const BJ = 8 * 3600e3; // 北京时区偏移
+const { bjDate, bjMonth } = require('./bjtime'); // 北京日期串（单一事实源，与 store/alerts/push 同口径）
 
 // 工具展示名（与 mcp.js / web 前端保持一致）
 const TOOL_LABELS = {
@@ -26,8 +27,9 @@ function weekStart(now = Date.now()) {
   return n.toISOString().slice(0, 10);
 }
 
-function bjToday(now = Date.now()) { return new Date(now + BJ).toISOString().slice(0, 10); }
-function bjMonthOf(now = Date.now()) { return bjToday(now).slice(0, 7); }
+// 本地别名：report 语义名（today / monthOf）→ bjtime 统一实现，行为与旧实现逐位一致
+function bjToday(now = Date.now()) { return bjDate(now); }
+function bjMonthOf(now = Date.now()) { return bjMonth(now); }
 
 // 日期串加减天数（不涉时区，纯字符串日历）
 function addDays(dateStr, n) {
@@ -140,6 +142,9 @@ function buildReport(agg, plans, opts, now = Date.now()) {
 
   const title = `AI 用量${type === 'week' ? '周报' : '月报'} · ${range.start} ~ ${range.end}`;
   const genAt = new Date(now + BJ).toISOString().slice(0, 16).replace('T', ' ');
+  // format:'list' —— 微信推送专用：企业微信 markdown 不支持表格，三处表格降级为列表行；
+  // 默认（不传）仍输出 GFM 表格，网页/复制/下载零影响。
+  const flat = (opts && opts.format) === 'list';
 
   // ---- 预算：当日目标 + 工具月额度（周报里月额度按 7/30 折算成周预算再比） ----
   const goal = plans && plans.dailyGoal ? Number(plans.dailyGoal.cny) || 0 : 0;
@@ -165,6 +170,25 @@ function buildReport(agg, plans, opts, now = Date.now()) {
   L.push('## 总览', '');
   if (!hasData) {
     L.push('- 本期暂无数据', '');
+  } else if (flat) {
+    L.push(`- 总成本（等价口径）：${fmtCny(cur.cny)}（环比 ${fmtDelta(cur.cny, prev.cny, prevHasData)}）`,
+      `- 请求数：${fmtInt(cur.requests)}（环比 ${fmtDelta(cur.requests, prev.requests, prevHasData)}）`,
+      `- token 总量：${fmtTok(cur.tokens)}（环比 ${fmtDelta(cur.tokens, prev.tokens, prevHasData)}）`,
+      '');
+
+    const toolRows = Object.entries(cur.tools).sort((a, b) => b[1].cny - a[1].cny || b[1].requests - a[1].requests);
+    L.push('## 工具榜', '');
+    for (const [tool, t] of toolRows) {
+      const pt = prev.tools[tool];
+      L.push(`- ${TOOL_LABELS[tool] || tool}：${fmtCny(t.cny)} · ${fmtInt(t.requests)} 次请求（环比 ${fmtDelta(t.cny, pt ? pt.cny : 0, !!pt)}）`);
+    }
+    L.push('');
+
+    L.push('## 模型榜 Top 5', '');
+    for (const m of cur.models.slice(0, 5)) {
+      L.push(`- ${m.model}（${TOOL_LABELS[m.tool] || m.tool}）：${fmtCny(m.cny)} · ${fmtInt(m.requests)} 次`);
+    }
+    L.push('');
   } else {
     L.push('| 指标 | 本期 | 环比上期 |', '| --- | --- | --- |',
       `| 总成本（等价口径） | ${fmtCny(cur.cny)} | ${fmtDelta(cur.cny, prev.cny, prevHasData)} |`,
@@ -187,6 +211,7 @@ function buildReport(agg, plans, opts, now = Date.now()) {
       L.push(`| ${m.model} | ${TOOL_LABELS[m.tool] || m.tool} | ${fmtInt(m.requests)} | ${fmtCny(m.cny)} |`);
     }
     L.push('');
+  }
 
     // 最贵的一天
     L.push('## 最贵的一天', '');
@@ -196,7 +221,6 @@ function buildReport(agg, plans, opts, now = Date.now()) {
     } else {
       L.push('- 本期无花费记录', '');
     }
-  }
 
   // 预算达成率：配置了 dailyGoal 或任一工具 cnyPerMonth 才出
   if (goal > 0 || quotas.length) {
@@ -245,4 +269,4 @@ function buildReport(agg, plans, opts, now = Date.now()) {
   return { title, markdown: L.join('\n'), data };
 }
 
-module.exports = { buildReport, weekStart };
+module.exports = { buildReport, weekStart, TOOL_LABELS };

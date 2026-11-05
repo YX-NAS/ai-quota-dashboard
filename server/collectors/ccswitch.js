@@ -27,9 +27,15 @@ function collect(dbPath = DB) {
       FROM proxy_request_logs
       WHERE created_at IS NOT NULL AND created_at >= ?`);
     const rows = [];
+    const skippedAppTypes = {}; // 未知 app_type 计数：{ [app_type]: 行数 }，供观测新形态（不误归）
     for (const r of st.iterate(cutoff)) {
       const tool = TOOL_MAP[r.app_type];
-      if (!tool) continue; // 未知 app_type 不丢数据也不误归——跳过并留待日志
+      if (!tool) {
+        // 未知 app_type 不丢数据也不误归——计数留痕（纯加字段，index.js/测试不感知）
+        const t = r.app_type == null ? 'unknown' : String(r.app_type);
+        skippedAppTypes[t] = (skippedAppTypes[t] || 0) + 1;
+        continue;
+      }
       const ts = Number(r.created_at) * 1000;
       if (!Number.isFinite(ts) || ts <= 0) continue;       // 时间非法的脏行跳过
       const costUsd = r.total_cost_usd != null ? Number(r.total_cost_usd) : null;
@@ -47,7 +53,9 @@ function collect(dbPath = DB) {
         dedupKey: null,
       });
     }
-    return { rows, error: null, source: dbPath };
+    const out = { rows, error: null, source: dbPath };
+    if (Object.keys(skippedAppTypes).length) out.skippedAppTypes = skippedAppTypes; // 无未知类型不带该字段
+    return out;
   } catch (e) {
     return { rows: [], error: e.message, source: dbPath };
   } finally {

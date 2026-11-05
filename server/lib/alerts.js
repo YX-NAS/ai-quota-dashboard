@@ -12,9 +12,11 @@ const http = require('node:http');
 const https = require('node:https');
 const { DatabaseSync } = require('node:sqlite');
 const history = require('./history');
+const notify = require('./notify'); // 站内通知：webhook 发送成功后同步入站内消息流
+const { bjDate } = require('./bjtime'); // 北京时间日期（单一事实源，与 store.js 同口径）
 
 // 阈值 / 冷却缺省值（老 plans.json 可能只有部分字段，逐字段兜底）
-const DEFAULTS = { fiveHour: 85, weekly: 85, dailyGoalPct: 100, cooldownMinutes: 60 };
+const DEFAULTS = { fiveHour: 85, weekly: 85, dailyGoalPct: 100, vpnUsed: 90, cooldownMinutes: 60 };
 const WINDOW_LABELS = { fiveHour: '5h', weekly: '周' };
 // 三家实时额度在快照里的字段名 → 冷却 key 用的稳定 provider id
 const PROVIDERS = [
@@ -25,14 +27,19 @@ const PROVIDERS = [
 const BUCKET_MS = 300e3; // 5 分钟桶：resetMsLeft 兜底 key 的量化粒度
 const SEND_TIMEOUT_MS = 10_000;
 
-// 北京时间日期串 YYYY-MM-DD（与 store.js 的口径一致：UTC+8 后取 ISO 前 10 位）
-const bjDate = ts => new Date(ts + 8 * 3600e3).toISOString().slice(0, 10);
-
 // 有限数才采信，否则取默认（容忍手写配置里的字符串数字，剔除 NaN/空串）
 function num(v, dft) {
   if (v == null || v === '') return dft;
   const n = Number(v);
   return Number.isFinite(n) ? n : dft;
+}
+
+// 推送文案用的字节短格式（1024 进制，两位有效小数；只出量级不出精度，泄露面与金额同规）
+function fmtBytesShort(v) {
+  let x = Number(v) || 0, i = 0;
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+  return (i === 0 ? Math.round(x) : Math.round(x * 10) / 10) + units[i];
 }
 
 // resetAt 归一为绝对毫秒：智谱给 epoch ms（Number），ChatGPT 给 ISO 字符串；其余视为缺失
@@ -85,7 +92,32 @@ function resetMessage(resetMs, now) {
   return `约 ${h} 小时${mins % 60 ? ` ${mins % 60} 分` : ''}后重置`;
 }
 
-// 评估（纯函数，不改入参）→ firing 事件列表，最多 3 provider × 2 窗口 + 当日目标 = 7 条
+// 千分位整数（智谱 used/total 可能是 token 或点数大数，只展示不解释单位口径）
+const fmtNum = n => Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+
+// 卡片正文（多行 Markdown，微信通道用）：只含百分比/数值/倒计时，绝不含密钥。
+// 未知事件形状返回空串，由适配器自行回退 message —— digest/测试等自定义卡片直接走 ev.card 覆盖。
+function renderCard(ev) {
+  const lines = [];
+  if (ev.kind === 'quota') {
+    if (ev.remainingPercent != null) lines.push(`剩余额度：${ev.remainingPercent}%`);
+    const a = ev.amounts || {};
+    if (a.remaining != null && a.total != null) {
+      const used = a.used != null ? fmtNum(a.used) : '—';
+      lines.push(`已用 ${used} / 总量 ${fmtNum(a.total)}`);
+    }
+    if (ev.message) lines.push(ev.message);
+  } else if (ev.kind === 'goal') {
+    if (ev.spent != null && ev.goal != null) lines.push(`已花 ¥${ev.spent} / 目标 ¥${ev.goal}`);
+    if (ev.message) lines.push(ev.message);
+  } else if (ev.kind === 'vpn') {
+    if (ev.remainingPercent != null) lines.push(`剩余流量：${ev.remainingPercent}%`);
+    if (ev.message) lines.push(ev.message);
+  }
+  return lines.join('\n');
+}
+
+// 评估（纯函数，不改入参）→ firing 事件列表，最多 3 provider × 2 窗口 + 当日目标 + VPN 流量包 = 8 条
 function evaluate(snapshot, plans, now = Date.now()) {
   const snap = snapshot || {};
   const alertsCfg = (plans && plans.alerts) || {};
@@ -94,6 +126,7 @@ function evaluate(snapshot, plans, now = Date.now()) {
     fiveHour: num(th.fiveHour, DEFAULTS.fiveHour),
     weekly: num(th.weekly, DEFAULTS.weekly),
     dailyGoalPct: num(th.dailyGoalPct, DEFAULTS.dailyGoalPct),
+    vpnUsed: num(th.vpnUsed, DEFAULTS.vpnUsed),
   };
   const events = [];
 
@@ -137,6 +170,9 @@ function evaluate(snapshot, plans, now = Date.now()) {
         severity: pct >= 95 ? 'critical' : 'warning',
         title: `⚠️ ${provider} ${WINDOW_LABELS[winId]}窗口已用 ${Math.round(pct)}%`,
         message: resetGuess != null ? resetMessage(resetGuess, now) : '',
+        // 卡片数据：剩余百分比三家都有；绝对值仅智谱提供（token/点数），其余 null
+        remainingPercent: Number.isFinite(Number(win.remainingPercent)) ? Math.round(Number(win.remainingPercent)) : null,
+        amounts: { used: win.used ?? null, total: win.total ?? null, remaining: win.remaining ?? null },
       });
     }
   }
@@ -161,8 +197,33 @@ function evaluate(snapshot, plans, now = Date.now()) {
           severity: pctRaw >= 100 ? 'critical' : 'warning',
           title: `💸 今日 AI 成本 ¥${Math.round(spent)} / 目标 ¥${Math.round(goal)}（${Math.round(pctRaw)}%）`,
           message: spent >= goal ? '已超支' : '接近目标',
+          // 卡片数据（金额与网页横幅同口径：costCny + equivalentCny）
+          spent: Math.round(spent * 100) / 100, goal: Math.round(goal * 100) / 100,
         });
       }
+    }
+  }
+
+  // 3) VPN 流量包：已用比例 ≥ vpnUsed 阈值触发（剩余不足预警，续订提醒口径）
+  //    冷却身份按北京日期（天级），同日再触发受 cooldownMinutes 抑制；流量单调增长，
+  //    跨日重复提醒符合「快用完记得续」的预期
+  const vq = snap.vpnQuota;
+  if (vq && vq.available) {
+    const vPct = Number(vq.usedPercent);
+    if (Number.isFinite(vPct) && vPct >= thresholds.vpnUsed) {
+      const daysLeft = vq.expireAt ? Math.max(0, Math.floor((vq.expireAt - now) / 86400e3)) : null; // 向下取整，与面板口径一致
+      events.push({
+        kind: 'vpn',
+        key: `vpn|${bjDate(now)}`,
+        provider: 'VPN 流量包',
+        window: 'package',
+        percent: Math.round(vPct),
+        resetAt: vq.expireAt || null,
+        severity: vPct >= 99 ? 'critical' : 'warning',
+        title: `📶 VPN 流量包已用 ${Math.round(vPct)}%（${fmtBytesShort(vq.usedBytes)}/${fmtBytesShort(vq.totalBytes)}）`,
+        message: '剩 ' + fmtBytesShort(vq.remainingBytes) + (daysLeft != null ? ' · ' + daysLeft + ' 天后到期，用完得续' : ''),
+        remainingPercent: Math.max(0, 100 - Math.round(vPct)),
+      });
     }
   }
   return events;
@@ -192,6 +253,7 @@ function createSqliteStore(opts = {}) {
   let conn = null;     // 惰性持有连接
   let impl = null;     // SQL 实现（成功初始化后缓存）
   let mem = null;      // 退化标记：非 null 即已切内存
+  let degraded = false; // 降级日志一次性标记（坏库每次 get/set 都失败，不能刷屏）
   const sql = () => {
     if (!conn) {
       conn = opts.db || new DatabaseSync(opts.path); // 二选一：注入连接或按路径打开
@@ -209,17 +271,26 @@ function createSqliteStore(opts = {}) {
       `).run(String(key), Number(firedAt), String(status || 'success')),
     };
   };
+  // 静默降级会掩盖「冷却跨重启失效」的真实原因：首次降级时打一条一次性错误日志
+  const degrade = e => {
+    mem = createMemoryStore();
+    if (!degraded) {
+      degraded = true;
+      console.error('[ai-quota] 冷却存储降级为内存:', (e && e.message) || e);
+    }
+    return mem;
+  };
   const cur = () => {
     if (mem) return mem;
     if (!impl) {
-      try { impl = sql(); } catch { mem = createMemoryStore(); return mem; }
+      try { impl = sql(); } catch (e) { return degrade(e); }
     }
     return impl;
   };
   return {
     backend: 'sqlite',
-    get(key) { try { return cur().get(key); } catch { mem = createMemoryStore(); return mem.get(key); } },
-    set(key, firedAt, status) { try { cur().set(key, firedAt, status); } catch { mem = createMemoryStore(); mem.set(key, firedAt, status); } },
+    get(key) { try { return cur().get(key); } catch (e) { return degrade(e).get(key); } },
+    set(key, firedAt, status) { try { cur().set(key, firedAt, status); } catch (e) { degrade(e).set(key, firedAt, status); } },
   };
 }
 
@@ -262,14 +333,37 @@ const ADAPTERS = {
       };
     },
   },
-  // serverchan：POST 原 URL，form 编码；title/desp 含中文与 Markdown，必须 URLSearchParams 编码，禁手拼
+  // serverchan：POST 原 URL，form 编码；title/desp 含中文与 Markdown，必须 URLSearchParams 编码，禁手拼。
+  // desp 优先用卡片 Markdown（Server酱微信端渲染 Markdown）
   serverchan: {
-    buildPayload(webhookUrl, title, message) {
+    buildPayload(webhookUrl, title, message, extra = {}) {
       return {
         url: webhookUrl,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ title, desp: message }).toString(),
+        body: new URLSearchParams({ title, desp: extra.card || message }).toString(),
       };
+    },
+  },
+  // 企业微信群机器人：POST 原 webhook（https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…），
+  // msgtype=markdown（支持加粗/字体色，不支持表格）。关键陷阱：其业务失败也返回 HTTP 200 +
+  // body {"errcode":非0,"errmsg":…}，只看状态码会把配错的 key 当成功 —— 必须配 verify() 校验响应体。
+  // 字体色仅 info(绿)/comment(灰)/warning(橙红)三种：critical 红、warning 灰、info(摘要/测试)绿。
+  wecom: {
+    buildPayload(webhookUrl, title, message, extra = {}) {
+      const color = extra.severity === 'critical' ? 'warning' : extra.severity === 'info' ? 'info' : 'comment';
+      const content = `**<font color="${color}">${title}</font>**\n${extra.card || message || ''}`.trim();
+      return {
+        url: webhookUrl,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ msgtype: 'markdown', markdown: { content } }),
+      };
+    },
+    verify(res) {
+      let data = null;
+      try { data = JSON.parse(String((res && res.body) || '')); } catch { return; } // 非 JSON 体交给状态码判定
+      if (data && typeof data === 'object' && data.errcode != null && Number(data.errcode) !== 0) {
+        throw new Error(`企业微信 errcode ${data.errcode}：${data.errmsg || '未知错误'}`);
+      }
     },
   },
   // generic：任意 URL，结构化 JSON（severity 供接收方分级路由）
@@ -291,7 +385,9 @@ const ADAPTERS = {
 };
 
 // 默认 sender：node:http/https 按协议选择；绝不 reject（失败以 { ok:false, error } 返回），
-// 不跟随重定向（3xx 一律按失败处理，防把含密钥的 payload 送到 Location 目标）
+// 不跟随重定向（3xx 一律按失败处理，防把含密钥的 payload 送到 Location 目标）。
+// 响应体收集上限 8KB：仅供适配器 verify() 校验业务错误码（企业微信 200+errcode!=0），
+// 超限丢弃余量 —— 消费流的行为与原 res.resume() 等价，不会挂起连接。
 function httpRequest(url, { method = 'POST', headers = {}, body = '' } = {}, timeoutMs = SEND_TIMEOUT_MS) {
   return new Promise(resolve => {
     let u;
@@ -305,11 +401,17 @@ function httpRequest(url, { method = 'POST', headers = {}, body = '' } = {}, tim
       timeout: timeoutMs,
     }, res => {
       const status = res.statusCode || 0;
-      res.resume(); // 响应体不消费，只关心状态码
-      if (status >= 300 && status < 400) return resolve({ ok: false, status, error: `重定向被拒绝 (HTTP ${status})` });
-      resolve(status >= 200 && status < 300
-        ? { ok: true, status }
-        : { ok: false, status, error: `HTTP ${status}` });
+      const chunks = [];
+      let size = 0;
+      res.on('data', c => { if (size < 8192) { chunks.push(c); size += c.length; } });
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (status >= 300 && status < 400) return resolve({ ok: false, status, error: `重定向被拒绝 (HTTP ${status})` });
+        resolve(status >= 200 && status < 300
+          ? { ok: true, status, body: text }
+          : { ok: false, status, error: `HTTP ${status}`, body: text });
+      });
+      res.on('error', () => resolve({ ok: false, status, error: '响应流中断' }));
     });
     req.on('timeout', () => req.destroy(new Error(`超时 (${timeoutMs}ms)`))); // timeout 事件不自动断请求，需显式 destroy
     req.on('error', e => resolve({ ok: false, status: 0, error: e.message }));
@@ -331,6 +433,7 @@ function send(adapter, event, deps = {}) {
   }
   const payload = a.buildPayload(url, ev.title, ev.message, {
     severity: ev.severity, percent: ev.percent, resetAt: ev.resetAt ?? null,
+    card: ev.card != null ? ev.card : renderCard(ev), // 事件自带卡片优先（digest/测试），否则按事件数据渲染
   });
   // 适配器可能改写目标 URL（ntfy 走站点根）：复核协议白名单
   let u2;
@@ -343,6 +446,8 @@ function send(adapter, event, deps = {}) {
     .then(() => sender(payload.url, { method: 'POST', headers: payload.headers, body: payload.body }, SEND_TIMEOUT_MS))
     .then(res => {
       if (!res || res.ok !== true) throw new Error((res && res.error) || `HTTP ${(res && res.status) || 0}`);
+      // 适配器级响应体校验（企业微信 HTTP 200 + errcode!=0 也算失败）；verify 抛错 → 整条失败上抛
+      if (typeof a.verify === 'function') a.verify(res);
       return res;
     });
 }
@@ -369,6 +474,8 @@ async function run(snapshot, plans, deps = {}) {
         await send(type, Object.assign({}, ev, { webhookUrl: String(cfg.webhookUrl) }), { sender });
         try { store.set(ev.key, now, 'success'); } catch { /* 冷却库写失败不影响主流程 */ }
         out.sent++;
+        // 站内同步记录：预警在导航栏铃铛/消息面板也可见（webhook 与站内消息互为备份）
+        try { (deps.notify || notify).add({ type: 'quota-alert', title: ev.title, body: ev.message, meta: { key: ev.key } }); } catch { /* 尽力 */ }
       } catch (e) {
         // 失败也占用冷却窗（失败不重试，下个评估周期受冷却约束自然再评估）；
         // 只记失败原因，绝不落完整 webhookUrl（path 即密钥）；console 同样只允许 host
@@ -386,7 +493,7 @@ async function run(snapshot, plans, deps = {}) {
 }
 
 module.exports = {
-  evaluate, send, run, httpRequest,
+  evaluate, send, run, httpRequest, renderCard,
   maskWebhookUrl, hostOf, sanitizeError,
   createMemoryStore, createSqliteStore, defaultStore,
   ADAPTERS, DEFAULTS,

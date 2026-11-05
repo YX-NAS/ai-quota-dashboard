@@ -1,24 +1,100 @@
 {
   "usdCnyRate": 7.2,
   "plans": {
-    "codex":         { "label": "ChatGPT · Codex",   "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
-    "claudeDesktop": { "label": "Claude Desktop",    "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
-    "claudeCode":    { "label": "Claude Code",       "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
-    "zcode":         { "label": "ZCode",             "plan": null, "cnyPerDay": null, "cnyPerMonth": null },
-    "workbuddy":     { "label": "WorkBuddy",         "plan": null, "cnyPerDay": null, "cnyPerMonth": null }
+    "codex": {
+      "label": "ChatGPT · Codex",
+      "plan": null,
+      "cnyPerDay": null,
+      "cnyPerMonth": null,
+      "usdPerMonth": null
+    },
+    "claudeDesktop": {
+      "label": "Claude Desktop",
+      "plan": null,
+      "cnyPerDay": null,
+      "cnyPerMonth": null,
+      "usdPerMonth": null
+    },
+    "claudeCode": {
+      "label": "Claude Code",
+      "plan": null,
+      "cnyPerDay": null,
+      "cnyPerMonth": null,
+      "usdPerMonth": null
+    },
+    "zcode": {
+      "label": "ZCode",
+      "plan": null,
+      "cnyPerDay": null,
+      "cnyPerMonth": null,
+      "usdPerMonth": null
+    },
+    "workbuddy": {
+      "label": "WorkBuddy",
+      "plan": null,
+      "cnyPerDay": null,
+      "cnyPerMonth": null,
+      "usdPerMonth": null
+    }
   },
   "priceOverrides": {},
   "quotaKeys": {
-    "zhipu":   { "token": "", "organizationId": "", "projectId": "" },
-    "minimax": { "apiKey": "" },
-    "chatgpt": { "accessToken": "" }
+    "zhipu": {
+      "token": "",
+      "organizationId": "",
+      "projectId": "",
+      "extraKeys": []
+    },
+    "minimax": {
+      "apiKey": ""
+    },
+    "chatgpt": {
+      "accessToken": ""
+    },
+    "deepseek": {
+      "apiKey": ""
+    },
+    "moonshot": {
+      "apiKey": ""
+    },
+    "volcengine": {
+      "apiKey": ""
+    },
+    "bailian": {
+      "accessKeyId": "",
+      "accessKeySecret": ""
+    },
+    "vpnPanel": {
+      "url": ""
+    }
   },
-  "dailyGoal": { "cny": 200 },
+  "dailyGoal": {
+    "cny": 200
+  },
   "alerts": {
     "enabled": false,
     "webhookType": "ntfy",
     "webhookUrl": "",
-    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
-    "cooldownMinutes": 60
+    "thresholds": {
+      "fiveHour": 85,
+      "weekly": 85,
+      "dailyGoalPct": 100,
+      "vpnUsed": 90
+    },
+    "cooldownMinutes": 60,
+    "digest": {
+      "enabled": false,
+      "hour": 21
+    },
+    "reportPush": {
+      "week": {
+        "enabled": false,
+        "hour": 9
+      },
+      "month": {
+        "enabled": false,
+        "hour": 9
+      }
+    }
   }
 }
