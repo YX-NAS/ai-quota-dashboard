@@ -69,7 +69,7 @@ export function renderQuotaCards() {
       ...planCostBadge('codex'),
       body: quotaBar('5 小时窗口', cgq.fiveHour && cgq.fiveHour.usedPercent, cgq.fiveHour && cgq.fiveHour.resetMsLeft)
           + quotaBar('周窗口', cgq.weekly && cgq.weekly.usedPercent, cgq.weekly && cgq.weekly.resetMsLeft),
-      fresh: '实时 · ' + new Date(cgq.fetchedAt).toLocaleTimeString('zh-CN'),
+      fresh: (cgq.archived ? '主端同步 · ' : '实时 · ') + new Date(cgq.fetchedAt).toLocaleTimeString('zh-CN'),
     });
   } else if (cgMode === 'error') {
     items.push({ name: 'ChatGPT Plus', note: 'Codex · GPT 系列', ...planCostBadge('codex'), body: quotaFailureHtml(cgq && cgq.reason), fresh: '' });
@@ -84,7 +84,7 @@ export function renderQuotaCards() {
       ...planCostBadge('workbuddy'),
       body: quotaBar('5 小时窗口', mmq.fiveHour && mmq.fiveHour.usedPercent, mmq.fiveHour && mmq.fiveHour.resetMsLeft)
           + quotaBar('周窗口', mmq.weekly && mmq.weekly.usedPercent, mmq.weekly && mmq.weekly.resetMsLeft),
-      fresh: '实时 · ' + new Date(mmq.fetchedAt).toLocaleTimeString('zh-CN'),
+      fresh: (mmq.archived ? '主端同步 · ' : '实时 · ') + new Date(mmq.fetchedAt).toLocaleTimeString('zh-CN'),
     });
   } else if (mmMode === 'error') {
     items.push({ name: 'MiniMax Token Plan MAX', note: 'ZCode / WorkBuddy / Codex · MiniMax 模型', ...planCostBadge('workbuddy'), body: quotaFailureHtml(mmq && mmq.reason), fresh: '' });

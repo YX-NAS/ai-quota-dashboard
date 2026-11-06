@@ -4,7 +4,8 @@
 // 约束：本文件只负责「构建一次」；缓存/60s 周期由调用方自理
 // （index.js 的 ensureFresh、mcp.js 的 snapshotCache）。
 const plansStore = require('./plans');
-const fs = require('node:fs'); // 云端 VPN 归档回退读 vpn-state.json 基线用
+const fs = require('node:fs'); // 云端 VPN 归档回退读 vpn-state.json / 额度展示快照 quota-snapshot.json
+const path = require('node:path');
 const { makePricer } = require('./pricing');
 const { aggregate, vendorAggregate, apiAggregate, modelAggregate, projectAggregate, compareYesterday, bjDate } = require('./store');
 const history = require('./history');
@@ -19,6 +20,24 @@ const zhipuQuota = require('../collectors/zhipu-quota');
 const apiBilling = require('../collectors/api-billing');
 const networkTraffic = require('../collectors/network-traffic');
 const vpnQuota = require('../collectors/vpn-quota');
+
+const QUOTA_SNAPSHOT_KEYS = ['chatgptQuota', 'minimaxQuota', 'zhipuQuota'];
+// 云端额度回退（纯函数，导出供测试）：展示端密钥不落云 → 实时额度采集必失败；
+// 用主端 cloud-sync 推来的 quota-snapshot.json（deploy-pack 已剥 raw 的百分比/倒计时数据）顶位渲染。
+// 仅 30 分钟新鲜窗内生效（超时视为未同步，卡片保持隐藏而非挂过期数字）；只替换失败的源，
+// live 可用结果永远优先。archived:true 标记 → 前端显示「主端同步」，预警引擎跳过（主端已推，防双发）。
+const QUOTA_SNAPSHOT_FRESH_MS = 30 * 60e3;
+function applyQuotaSnapshotFallback(quotaData, snapshotJson, now = Date.now()) {
+  if (!snapshotJson || !Number.isFinite(snapshotJson.generatedAt)) return quotaData;
+  if (now - snapshotJson.generatedAt > QUOTA_SNAPSHOT_FRESH_MS) return quotaData;
+  for (const key of QUOTA_SNAPSHOT_KEYS) {
+    const cur = quotaData[key];
+    if (cur && cur.available) continue;
+    const q = snapshotJson[key];
+    if (q && q.available) quotaData[key] = Object.assign({}, q, { archived: true, archivedAt: snapshotJson.generatedAt });
+  }
+  return quotaData;
+}
 
 async function buildSnapshot() {
   const plans = plansStore.load();
@@ -93,6 +112,14 @@ async function buildSnapshot() {
     if (err) errors[key] = err;
     quotaData[key] = data;
   });
+
+  // 云端额度回退：只读展示模式才启用（本机的 live 采集永远优先，绝不拿旧快照盖新数据）
+  if (process.env.AI_QUOTA_HISTORY === 'readonly') {
+    try {
+      const qsRaw = fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'quota-snapshot.json'), 'utf8');
+      applyQuotaSnapshotFallback(quotaData, JSON.parse(qsRaw));
+    } catch { /* 无同步文件：保持采集器原降级 */ }
+  }
 
   // VPN 流量包：本轮累计差值落库（daily_vpn 增量归档），今日用量一律从库回读（单一事实源，
   // 多进程/重启不双计——差值基线在 vpn-state.json）。归档失败只记 errors.vpnHistory，不阻塞。
@@ -197,4 +224,4 @@ async function buildSnapshot() {
   };
 }
 
-module.exports = { buildSnapshot };
+module.exports = { buildSnapshot, applyQuotaSnapshotFallback, QUOTA_SNAPSHOT_FRESH_MS };

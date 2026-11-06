@@ -133,7 +133,8 @@ function evaluate(snapshot, plans, now = Date.now()) {
   // 1) 三家 provider × {5h, 周窗口}：available 且 usedPercent ≥ 阈值才触发
   for (const p of PROVIDERS) {
     const q = snap[p.field];
-    if (!q || !q.available) continue;
+    // archived：云端展示端回退用的主端同步快照——预警由主端评估推送，这里跳过防双发
+    if (!q || !q.available || q.archived) continue;
     const provider = String(q.provider || p.id);
     for (const winId of ['fiveHour', 'weekly']) {
       const win = q[winId] || {};

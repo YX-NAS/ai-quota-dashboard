@@ -3047,7 +3047,51 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     assert.ok(JSON.parse(r.body).error.includes('未配置'));
   });
 
-  console.log('== 集成：mcp.js report 冒烟（子进程 + 独立配置目录） ==');
+  t('extractQuotaSnapshot：available 源入快照、剥 raw（PII 零出境）、不可用源省略', () => {
+  const { extractQuotaSnapshot } = require('../scripts/deploy-pack.js');
+  const sum = {
+    chatgptQuota: { available: true, provider: 'ChatGPT Plus', fiveHour: { usedPercent: 63 }, fetchedAt: 1700000000000, raw: { user_id: 'user-SECRET', email: 'me@privaterelay.appleid.com' } },
+    minimaxQuota: { available: false, reason: '未配置' },
+    zhipuQuota: { available: true, provider: '智谱', weekly: { usedPercent: 10 }, fetchedAt: 1700000000001, raw: { org_id: 'org-SECRET' } },
+  };
+  const q = extractQuotaSnapshot(sum, 1700000001000);
+  assert.equal(q.generatedAt, 1700000001000);
+  assert.equal(q.chatgptQuota.fiveHour.usedPercent, 63);
+  assert.ok(!('raw' in q.chatgptQuota), 'raw 必须剥离');
+  assert.ok(!JSON.stringify(q).includes('user-SECRET') && !JSON.stringify(q).includes('me@privaterelay'), 'PII 不得出现在快照');
+  assert.ok(!('minimaxQuota' in q), '不可用源省略');
+  assert.equal(q.zhipuQuota.provider, '智谱');
+});
+
+t('applyQuotaSnapshotFallback：只顶失败源 / 30 分钟新鲜窗 / archived 标记 / live 优先', () => {
+  const { applyQuotaSnapshotFallback, QUOTA_SNAPSHOT_FRESH_MS } = require('../server/lib/snapshot');
+  const now = Date.now();
+  const qs = { generatedAt: now - 60e3, chatgptQuota: { available: true, provider: 'P', fiveHour: { usedPercent: 50 }, fetchedAt: now - 60e3 } };
+  // 失败源被顶替 + archived 标记
+  let d = { chatgptQuota: { available: false, notConfigured: true } };
+  d = applyQuotaSnapshotFallback(d, qs, now);
+  assert.equal(d.chatgptQuota.available, true); assert.equal(d.chatgptQuota.archived, true);
+  // live 可用结果不被覆盖
+  d = { chatgptQuota: { available: true, provider: 'live' } };
+  d = applyQuotaSnapshotFallback(d, qs, now);
+  assert.equal(d.chatgptQuota.provider, 'live', 'live 优先');
+  assert.ok(!d.chatgptQuota.archived);
+  // 超新鲜窗不使用
+  d = { chatgptQuota: { available: false } };
+  d = applyQuotaSnapshotFallback(d, { generatedAt: now - QUOTA_SNAPSHOT_FRESH_MS - 1, chatgptQuota: { available: true } }, now);
+  assert.equal(d.chatgptQuota.available, false, '过期快照不回退');
+  // 无文件直通
+  d = applyQuotaSnapshotFallback({ minimaxQuota: null }, null, now);
+  assert.equal(d.minimaxQuota, null);
+  // 预警引擎跳过 archived（主端已推，防双发）
+  const alerts = require('../server/lib/alerts');
+  const evs = alerts.evaluate({ chatgptQuota: { available: true, archived: true, provider: 'P', fetchedAt: now, fiveHour: { usedPercent: 97, resetMsLeft: 3600e3 }, weekly: { usedPercent: 97, resetMsLeft: 7200e3 } } }, { alerts: {} }, now);
+  assert.equal(evs.filter(e => e.kind === 'quota').length, 0, 'archived 额度不触发预警');
+  const evs2 = alerts.evaluate({ chatgptQuota: { available: true, provider: 'P', fetchedAt: now, fiveHour: { usedPercent: 97, resetMsLeft: 3600e3 }, weekly: { usedPercent: 97, resetMsLeft: 7200e3 } } }, { alerts: {} }, now);
+  assert.ok(evs2.filter(e => e.kind === 'quota').length >= 1, 'live 高用量照常预警');
+});
+
+console.log('== 集成：mcp.js report 冒烟（子进程 + 独立配置目录） ==');
   await ta('node mcp/mcp.js report week：exit 0 且 stdout 含「周报」', async () => {
     const mcpTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aqd-mcp-'));
     try {

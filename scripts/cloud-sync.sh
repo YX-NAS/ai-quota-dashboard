@@ -12,6 +12,8 @@ node "$DIR/scripts/deploy-pack.js" "$DIR/dist/cloud-pack"
 # -z 压缩：归档数 MB，跨境/透明代理链路下未压缩的批量传输易卡死（实测 8.9MB 挂起，180KB 秒过）
 rsync -az --checksum "$DIR/dist/cloud-pack/history.sqlite" "$DIR/dist/cloud-pack/vpn-state.json" "$DEST/"
 [ -f "$DIR/dist/cloud-pack/notifications.json" ] && rsync -az --checksum "$DIR/dist/cloud-pack/notifications.json" "$DEST/" || true
+# 实时额度展示快照（主端剥 raw 后的百分比/倒计时数据；无密钥无 PII）——云端额度卡回退渲染依赖
+[ -f "$DIR/dist/cloud-pack/quota-snapshot.json" ] && rsync -az --checksum "$DIR/dist/cloud-pack/quota-snapshot.json" "$DEST/" || true
 # plans.json 每次覆盖：包内是脱敏展示配置（无任何密钥，deploy-pack 机械保证），以主端为准；
 # 服务器独有的只有 auth.json（不在包内）。旧「首次判断」会被服务自生成的模板挡掉，已废弃
 rsync -az --checksum "$DIR/dist/cloud-pack/plans.json" "$DEST/"
