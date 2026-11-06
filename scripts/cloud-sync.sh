@@ -9,10 +9,10 @@ DEST="${1:?用法: cloud-sync.sh user@server:/path/to/cloud-config-dir}"
 
 node "$DIR/scripts/deploy-pack.js" "$DIR/dist/cloud-pack"
 
-# plans.json 只在首次推送（服务器上可能有独立改动如推送开关，不覆盖）；归档与运行数据常覆盖
-rsync -a --checksum "$DIR/dist/cloud-pack/history.sqlite" "$DIR/dist/cloud-pack/vpn-state.json" "$DEST/" 2>/dev/null || true
-[ -f "$DIR/dist/cloud-pack/notifications.json" ] && rsync -a --checksum "$DIR/dist/cloud-pack/notifications.json" "$DEST/" || true
-if ssh "${DEST%%:*}" "test ! -f ${DEST##*:}/plans.json" 2>/dev/null; then
-  rsync -a "$DIR/dist/cloud-pack/plans.json" "$DEST/"
-fi
+# -z 压缩：归档数 MB，跨境/透明代理链路下未压缩的批量传输易卡死（实测 8.9MB 挂起，180KB 秒过）
+rsync -az --checksum "$DIR/dist/cloud-pack/history.sqlite" "$DIR/dist/cloud-pack/vpn-state.json" "$DEST/"
+[ -f "$DIR/dist/cloud-pack/notifications.json" ] && rsync -az --checksum "$DIR/dist/cloud-pack/notifications.json" "$DEST/" || true
+# plans.json 每次覆盖：包内是脱敏展示配置（无任何密钥，deploy-pack 机械保证），以主端为准；
+# 服务器独有的只有 auth.json（不在包内）。旧「首次判断」会被服务自生成的模板挡掉，已废弃
+rsync -az --checksum "$DIR/dist/cloud-pack/plans.json" "$DEST/"
 echo "✓ 已同步到 $DEST（云服务器只读消费，下一快照周期自动生效）"

@@ -45,15 +45,16 @@ async function buildSnapshot() {
   }
 
   // 历史归档：聚合结果落库 + 归档补缺合并（raw 优先、archive 只补缺）。
+  // 两者解耦：syncFromAgg 返回 false 有两种语义——库不可用（merge 也会自行降级 null）
+  // 与 readonly 云端模式跳过写入（merge 必须照常，否则云端归档数据整体不可见）。
   // 容错：归档库打开/读写任何失败只记 collectorErrors.history，绝不阻塞快照主流程
   try {
-    if (history.syncFromAgg(agg)) {
-      const merged = history.mergeArchived(agg.daily, agg.models, pricer);
-      if (merged) {
-        agg.daily = merged.daily;
-        agg.dailyKeys = merged.dailyKeys;
-        agg.models = merged.models;
-      }
+    history.syncFromAgg(agg);
+    const merged = history.mergeArchived(agg.daily, agg.models, pricer);
+    if (merged) {
+      agg.daily = merged.daily;
+      agg.dailyKeys = merged.dailyKeys;
+      agg.models = merged.models;
     }
   } catch (e) {
     errors.history = e.message;

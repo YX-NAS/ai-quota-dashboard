@@ -1442,6 +1442,28 @@ t('readonly 模式（云端部署）：sync 全部直通 false 零写入，读�
   assert.equal(history.syncFromAgg(aggregate([zRow('2026-01-07')], pricer)), true, '退出 readonly 后写恢复');
 });
 
+t('readonly 新鲜度：归档文件被 rsync 覆盖（mtime/size 变）后连接自动重开读到新数据', () => {
+  history.close();
+  const day = '2027-06-02';
+  // ① 写模式落 Old 数据 → close
+  assert.equal(history.syncNetworkDaily([{ date: day, network: 'wifi:Old', label: 'Old', rxBytes: 100, txBytes: 10 }]), true);
+  history.close();
+  // ② readonly 读到 Old（并建立单例连接，两次调用走复用路径不抛）
+  process.env.AI_QUOTA_HISTORY = 'readonly';
+  assert.equal(history.networkDaily(31).some(r => r.network === 'wifi:Old'), true);
+  assert.equal(history.networkDaily(31).some(r => r.network === 'wifi:Old'), true);
+  // ③ 模拟 cloud-sync 覆盖：文件内容变化（写模式加 New 行使 mtime+size 变）→ 切回 readonly 重开，应见全量
+  delete process.env.AI_QUOTA_HISTORY;
+  history.close();
+  assert.equal(history.syncNetworkDaily([{ date: day, network: 'wifi:New', label: 'New', rxBytes: 500, txBytes: 5 }]), true);
+  history.close();
+  process.env.AI_QUOTA_HISTORY = 'readonly';
+  const rows = history.networkDaily(31).filter(r => r.date === day);
+  assert.ok(rows.some(r => r.network === 'wifi:Old') && rows.some(r => r.network === 'wifi:New'), '覆盖后重开读到新内容');
+  delete process.env.AI_QUOTA_HISTORY;
+  history.close();
+});
+
 console.log('== report：周/月报生成器 ==');
 const { buildReport, weekStart } = require('../server/lib/report');
 const NOW = Date.UTC(2026, 9, 7, 4, 0); // 北京 2026-10-07（周三）12:00 → 本周 = 10-05（周一）~ 10-11（周日）

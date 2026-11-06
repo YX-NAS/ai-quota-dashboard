@@ -68,19 +68,25 @@ function setJournalMode(conn, mode) {
 }
 
 // 打开归档库：WAL 优先，失败降级 journal DELETE，再失败返回 null（调用方降级为纯内存）
-// readonly 模式：以 SQLite 官方只读标志打开（不建表、不产生 WAL），供云端「归档只读消费」部署
+// readonly 模式：以 SQLite 官方只读标志打开（不建表、不产生 WAL），供云端「归档只读消费」部署；
+// 且每次核对源文件 mtime+size —— 本机 cloud-sync 用 rsync 覆盖归档后，只读单例连接仍绑旧 inode，
+// 不重开就永远读到陈旧快照。文件变了就关旧连接、重开拿新内容（云端数据刷新依赖此路径）。
+let roStamp = '';
 function open(dbPath = DB_PATH) {
   if (!enabled()) return null;
-  if (db) return db;
   if (readOnly()) {
     try {
-      // 文件不存在时只读模式会失败 → 返回 null，merge/sync 调用方各自降级（不建空库）
-      if (!fs.existsSync(dbPath)) return null;
+      // 文件不存在时只读模式失败 → 返回 null，merge/sync 调用方各自降级（不建空库）
+      const st = fs.statSync(dbPath);
+      const stamp = st.mtimeMs + '|' + st.size;
+      if (db && stamp === roStamp) return db; // 未变：复用单例
+      if (db) { try { db.close(); } catch { /* 尽力 */ } db = null; }
       const conn = new DatabaseSync(dbPath, { readOnly: true });
-      db = conn;
+      db = conn; roStamp = stamp;
       return db;
-    } catch { return null; }
+    } catch { return db || null; } // stat 失败（文件被删/同步中）：保留旧连接继续读，下次 open 再试
   }
+  if (db) return db;
   let conn = null;
   try {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -106,6 +112,7 @@ function close() {
   if (db) { try { db.close(); } catch { /* 已关闭 */ } }
   db = null;
   fpCache.clear();
+  roStamp = '';
 }
 
 // —— 脏行指纹缓存（docs/plans/v1.5-PLAN.md 性能专项：每 60s 全量 UPSERT 开销 → 脏行指纹跳过）——

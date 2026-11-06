@@ -151,6 +151,12 @@ function billingKeyChip(kc) {
   if (kc.ok) return '<span class="keychip ok">Key 有效</span>';
   return `<span class="keychip bad" title="${esc(kc.reason)}">Key 失效</span>`;
 }
+// 并卡后的多 Key 徽标：口径同上，前缀 Key 名称以区分各把 Key
+function labeledKeyChip(label, kc) {
+  if (!kc || !kc.checked) return `<span class="keychip mut">${esc(label)} Key 未检测</span>`;
+  if (kc.ok) return `<span class="keychip ok">${esc(label)} Key 有效</span>`;
+  return `<span class="keychip bad" title="${esc(kc.reason)}">${esc(label)} Key 失效</span>`;
+}
 // 金额余额区（仅按量服务商）：zhipu 用 account 字段，其余用 balance；未充值/失败降级
 function billingBalanceHtml(vendor, q, mmKey) {
   if (vendor === 'volcengine') return volcengineModelsHtml(q, null, mmKey);
@@ -227,44 +233,54 @@ function zhipuExtraCard(it) {
   </div>`;
 }
 
-// 动态卡：一个 ZCode provider 一张（Key 检测 + 按量余额/费用 / 订阅说明）
-// vendorPrimary：同服务商出现多个按量 provider 时，余额/用量费用只在首卡展示
-//（余额按服务商账户、费用按服务商聚合，多 Key 共享同一口径），副卡注明并入主卡，避免串显误导
-function billingProviderCard(p, ab, vendors, vendorPrimary) {
+// 动态卡：一个服务商一张（同服务商多个 ZCode provider 并卡；Key 检测 + 按量余额/费用 / 订阅说明）
+// 余额按服务商账户、费用按服务商聚合——同服务商拆多卡只是同一口径数字重复，
+// 故并为主卡一张：副 Key 的探活徽标带名称并入卡头，模型清单取并集，副 Key 名在卡内注明
+function billingProviderCard(group, ab, vendors) {
+  const [p, ...rest] = group;
   const meta = BILLING_META[p.vendor] || {};
-  const name = p.label || meta.name || p.providerId;
+  // 并卡后标题用服务商名（主 Key 名会盖住其余 Key）；单 Key 仍用用户自定义 label
+  const name = rest.length ? (meta.name || p.label || p.providerId) : (p.label || meta.name || p.providerId);
   const q = ab[p.vendor] || null;
   const kc = (ab.keyChecks || {})[p.providerId] || {};
   const sub = p.billingKind === 'subscription';
   const badge = sub ? '<span class="tag">订阅</span>' : '<span class="tag sub-pay">按量</span>';
+  // 模型清单取并集（同服务商多 Key 共用模型，Set 去重防重复 chip）
+  const modelSet = new Set();
+  for (const x of group) for (const m of (x.models || [])) modelSet.add(m);
+  const models = [...modelSet];
   // 火山方舟：主位 volcengineModelsHtml 已展示 /api/v3/models 实拉清单，personalModelIds 不再重复出 chips
   const modelChips = p.vendor === 'volcengine' ? '' : modelChipsHtml('billing-' + p.providerId,
-    (p.models || []).map(m => `<span class="mm">${esc(m)}</span>`).join(''));
+    models.map(m => `<span class="mm">${esc(m)}</span>`).join(''));
   const noteHtml = sub
     ? '订阅套餐 · 额度见上方套餐区'
     : (meta.note || '按 token 计费');
+  // Key 健康徽标：并卡时每把都带名称（否则分不清哪个圆点对应哪把 Key）
+  const keyChips = rest.length
+    ? [labeledKeyChip(p.label || p.providerId, kc),
+       ...rest.map(x => labeledKeyChip(x.label || x.providerId, (ab.keyChecks || {})[x.providerId] || {}))].join(' ')
+    : billingKeyChip(kc);
   let mid, costHtml;
   if (sub) {
     mid = '<div class="billing-balance"><span class="bal-na">订阅制 · 不按量扣费</span></div>';
     costHtml = '';
-  } else if (vendorPrimary) {
-    mid = `<div class="billing-balance"><span class="bal-na">余额见「${esc(vendorPrimary)}」卡</span></div>`
-      + `<div class="billing-sub">同服务商多 Key · 余额与用量费用按服务商口径合并，主卡统一展示</div>`;
-    costHtml = `<div class="quota-line"><span>用量费用</span><span class="mut">与「${esc(vendorPrimary)}」合并统计</span></div>`;
   } else if (p.vendor === 'volcengine') {
-    mid = volcengineModelsHtml(q, p.models, 'billing-' + p.providerId); // 配置的模型优先展示（billingBalanceHtml 的 volcengine 分支无配置信息）
+    mid = volcengineModelsHtml(q, models, 'billing-' + p.providerId); // 配置的模型优先展示（billingBalanceHtml 的 volcengine 分支无配置信息）
     costHtml = billingCostLines(vendors[p.vendor] || {});
   } else {
     mid = billingBalanceHtml(p.vendor, q);
     costHtml = billingCostLines(vendors[p.vendor] || {});
   }
-  const fresh = (q && q.available && q.fetchedAt && !vendorPrimary)
+  const mergeNote = rest.length
+    ? `<div class="billing-sub">同服务商 ${group.length} 把 Key 已并卡：${esc(rest.map(x => x.label || x.providerId).join('、'))} · 余额与用量费用按服务商口径统计</div>`
+    : '';
+  const fresh = (q && q.available && q.fetchedAt)
     ? '实时 · ' + new Date(q.fetchedAt).toLocaleTimeString('zh-CN') + ' · ' + (meta.src || '')
     : (p.hasProbe ? '费用 = 按量线路用量 × 官方单价（无单价模型不计费）' : '无探测端点 · 费用 = 按量线路用量 × 官方单价（无单价模型不计费）');
   return `<div class="card" data-key="billing-${esc(p.providerId)}">
-    <h3>${esc(name)} ${badge} ${billingKeyChip(kc)}</h3>
+    <h3>${esc(name)} ${badge} ${keyChips}</h3>
     <div class="rows"><div><span class="k">适用</span><span class="mut" style="font-size:12px">${esc(noteHtml)}</span></div></div>
-    ${mid}
+    ${mid}${mergeNote}
     ${modelChips}
     ${costHtml}
     <div class="fresh">${esc(fresh)}</div>
@@ -280,20 +296,20 @@ export function renderBillingCards() {
   const zhipuExtras = (Array.isArray(ab.zhipuExtraKeys) ? ab.zhipuExtraKeys : []).filter(x => !x.linkedProvider);
   let items;
   if (providers.length) {
-    // 每个服务商首个按量 provider 为主卡（展示余额/费用），其余为副卡（注明并入主卡）
-    const vendorFirstName = new Map();
+    // 同服务商多个按量 provider 并成一组出一张卡（余额/费用本就是服务商口径，拆卡只是重复同组数字）；
+    // 未知服务商（vendor null）无从聚合，仍各自独立成卡
+    const groups = [];
+    const byVendor = new Map();
     for (const p of providers) {
-      if (p.vendor && !vendorFirstName.has(p.vendor)) vendorFirstName.set(p.vendor, p.label || p.providerId);
+      if (!p.vendor) { groups.push([p]); continue; }
+      let g = byVendor.get(p.vendor);
+      if (!g) { g = []; byVendor.set(p.vendor, g); groups.push(g); }
+      g.push(p);
     }
-    const vendorSeen = new Set();
-    items = providers.map(p => {
-      const primary = !p.vendor || !vendorSeen.has(p.vendor);
-      vendorSeen.add(p.vendor);
-      return billingProviderCard(p, ab, vendors, primary ? null : (vendorFirstName.get(p.vendor) || null));
-    });
+    items = groups.map(g => billingProviderCard(g, ab, vendors));
     // 附加卡紧跟智谱主卡之后（无智谱 provider 时排在末尾）
     if (zhipuExtras.length) {
-      const zi = providers.findIndex(p => p.vendor === 'zhipu');
+      const zi = groups.findIndex(g => g[0].vendor === 'zhipu');
       items.splice(zi >= 0 ? zi + 1 : items.length, 0, ...zhipuExtras.map(zhipuExtraCard));
     }
     // 火山方舟独立卡：Key 来自设置面板且未接入 ZCode 自定义模型（linkedProvider 非空 = provider 卡已展示）

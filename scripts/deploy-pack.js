@@ -40,12 +40,14 @@ async function main() {
   const cfgDir = plansStore.CONFIG_DIR;
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
-
-  // ① 归档库：backup API 产出合并 WAL 的单文件（读端不受半写/WAL 撕裂影响，scp 即原子）
+  // ① 归档库：VACUUM INTO 产出合并 WAL 的一致性单文件快照（只读执行、不写源库，
+  //    Node 22/26 通吃——node:sqlite 的 db.backup 在部分版本不存在，不再依赖）
   const srcDb = path.join(cfgDir, 'history.sqlite');
   if (fs.existsSync(srcDb)) {
     const db = new DatabaseSync(srcDb, { readOnly: true });
-    try { await db.backup(path.join(OUT, 'history.sqlite')); } finally { db.close(); }
+    try {
+      db.exec(`VACUUM INTO '${path.join(OUT, 'history.sqlite').replace(/'/g, "''")}'`);
+    } finally { db.close(); }
   }
 
   // ② 脱敏 plans

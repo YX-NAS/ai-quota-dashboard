@@ -45,7 +45,7 @@ struct PlanQuota {
 }
 // 按量服务商行（与网页「按量统计」区对齐：今日/本月费用 + 余额 + Key 健康）
 struct PaygRowData {
-    var id = ""                  // providerId 作稳定 id（两个同厂商 provider 的短名会重复，不能用 label）
+    var id = ""                  // providerId 作稳定 id（同厂商多 provider 已并为一行，id 取首个）
     var label = ""
     var todayCny = 0.0, monthCny = 0.0
     var reqs = 0
@@ -186,14 +186,26 @@ func fetchWidgetData() -> WidgetData {
                 }
                 return "—"
             }
+            // 同服务商多个按量 provider 合并为一行（余额/费用本就按服务商口径，拆行只是重复同组数字）；
+            // 与网页「按量统计」并卡策略一致。keyOk 取各 key 与：任一失效即失效，全未探测为 nil
+            var byVendor: [String: Int] = [:]   // vendor → r.payg 下标
             for p in provs {
                 guard (p["billingKind"] as? String) != "subscription" else { continue }
                 let vendor = (p["vendor"] as? String) ?? ""
                 guard !vendor.isEmpty else { continue }
+                let pid = p["providerId"] as? String
+                if let i = byVendor[vendor] {
+                    if let pid = pid, let kk = kcs[pid] as? [String: Any] {
+                        let ok = (kk["ok"] as? Bool) ?? false
+                        r.payg[i].keyOk = (r.payg[i].keyOk == false || ok == false) ? false : true
+                    }
+                    continue
+                }
+                byVendor[vendor] = r.payg.count
                 var row = PaygRowData()
-                row.id = (p["providerId"] as? String) ?? vendor
+                row.id = pid ?? vendor
                 row.label = shortVendor(vendor, (p["label"] as? String) ?? vendor)
-                if let pid = p["providerId"] as? String, let kk = kcs[pid] as? [String: Any] {
+                if let pid = pid, let kk = kcs[pid] as? [String: Any] {
                     row.keyOk = (kk["ok"] as? Bool) ?? false
                 }
                 if let vv = vends[vendor] as? [String: Any] {
