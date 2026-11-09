@@ -3053,6 +3053,7 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     chatgptQuota: { available: true, provider: 'ChatGPT Plus', fiveHour: { usedPercent: 63 }, fetchedAt: 1700000000000, raw: { user_id: 'user-SECRET', email: 'me@privaterelay.appleid.com' } },
     minimaxQuota: { available: false, reason: '未配置' },
     zhipuQuota: { available: true, provider: '智谱', weekly: { usedPercent: 10 }, fetchedAt: 1700000000001, raw: { org_id: 'org-SECRET' } },
+    network: { current: { key: 'wifi:Home', label: 'Home', rxRate: 100, txRate: 200 }, today: { rx: 9, tx: 9 } },
   };
   const q = extractQuotaSnapshot(sum, 1700000001000);
   assert.equal(q.generatedAt, 1700000001000);
@@ -3061,6 +3062,48 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
   assert.ok(!JSON.stringify(q).includes('user-SECRET') && !JSON.stringify(q).includes('me@privaterelay'), 'PII 不得出现在快照');
   assert.ok(!('minimaxQuota' in q), '不可用源省略');
   assert.equal(q.zhipuQuota.provider, '智谱');
+  // v1.7.3：network 只带 current（today/month 云端从归档读）
+  assert.deepEqual(q.network, { current: sum.network.current });
+});
+
+t('sync-state 状态机：3 连败首报、恢复清零、持续失败每日重推、成功不报警', () => {
+  const { updateState, FAILS_TO_ALERT, RETALERT_MS } = require('../scripts/sync-state.js');
+  const now = Date.now();
+  let s = {};
+  for (let i = 1; i < FAILS_TO_ALERT; i++) {
+    const r = updateState(s, false, now + i);
+    s = r.next;
+    assert.equal(r.shouldAlert, false, `第 ${i} 次失败不报警`);
+  }
+  let r = updateState(s, false, now + FAILS_TO_ALERT);
+  assert.equal(r.shouldAlert, true, '第 3 次连败报警');
+  assert.equal(r.next.lastAlertAt, now + FAILS_TO_ALERT);
+  s = r.next;
+  r = updateState(s, false, now + FAILS_TO_ALERT + 3600e3);
+  assert.equal(r.shouldAlert, false, '1 小时内继续失败不重复报');
+  r = updateState(s, false, now + FAILS_TO_ALERT + RETALERT_MS + 1000);
+  assert.equal(r.shouldAlert, true, '超 24h 重推');
+  r = updateState(s, true, now + FAILS_TO_ALERT + 7200e3);
+  assert.equal(r.next.fails, 0, '成功清零');
+  assert.equal(r.shouldAlert, false);
+  // 清零后重新计数：再 3 连败又能报警
+  let t = {};
+  for (let i = 0; i < FAILS_TO_ALERT; i++) t = updateState(t, false, now + i).next;
+  assert.equal(t.fails, FAILS_TO_ALERT);
+});
+
+t('calcSyncStale：12h 阈值边界 / 时钟回拨防护 / 无 marker 返回 null', () => {
+  const { calcSyncStale, STALE_AFTER_HOURS } = require('../server/lib/snapshot');
+  const now = Date.now();
+  assert.equal(calcSyncStale(null, now), null);
+  assert.equal(calcSyncStale({ syncedAt: 'x' }, now), null, '脏值防御');
+  assert.equal(calcSyncStale({ syncedAt: now + 60e3 }, now), null, '未来时间戳按不可信处理');
+  let st = calcSyncStale({ syncedAt: now - 11.9 * 3600e3 }, now);
+  assert.equal(st.active, false, '11.9h 未越阈值');
+  st = calcSyncStale({ syncedAt: now - (STALE_AFTER_HOURS + 0.1) * 3600e3 }, now);
+  assert.equal(st.active, true, '12.1h 越阈值');
+  assert.equal(st.ageHours, 12.1);
+  assert.equal(st.syncedAt, now - (STALE_AFTER_HOURS + 0.1) * 3600e3);
 });
 
 t('applyQuotaSnapshotFallback：只顶失败源 / 30 分钟新鲜窗 / archived 标记 / live 优先', () => {

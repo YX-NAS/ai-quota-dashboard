@@ -555,6 +555,13 @@ body.anim-once #cards .card:nth-child(5) { animation-delay: .26s; }
 }
 .err-banner[hidden] { display: none; }
 .err-banner .seg { margin-left: 0; }
+/* 陈旧横幅（云端展示端）：与 err-banner 同构但琥珀——数据可读只是旧，不是错误 */
+.warn-banner {
+  margin: 14px 0 0; padding: 11px 16px; font-size: 13px; color: var(--amber);
+  background: rgba(245, 158, 11, .1); border: 1px solid rgba(245, 158, 11, .4);
+  border-radius: var(--radius);
+}
+.warn-banner[hidden] { display: none; }
 .skeleton-line {
   color: var(--muted); font-size: 13px; padding: 26px 16px; text-align: center;
   border: 1px dashed var(--border-strong); border-radius: var(--radius);

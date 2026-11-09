@@ -22,6 +22,17 @@ const networkTraffic = require('../collectors/network-traffic');
 const vpnQuota = require('../collectors/vpn-quota');
 
 const QUOTA_SNAPSHOT_KEYS = ['chatgptQuota', 'minimaxQuota', 'zhipuQuota'];
+// 云端数据陈旧判定（纯函数，导出供测试）：唯一依据是主端「最后一轮 pack+rsync 全部成功送达」
+// 的 sync-marker 时间戳（失败轮不刷新）——主端脚本挂没挂、网络断没断都诚实反映在 age 上。
+// 阈值 12h：同步周期 10 分钟，但要容忍笔记本整夜合盖（8~10h 无同步属正常），醒来下一轮即恢复，
+// 低于 24h 又能做到"用户白天打开就看到提醒"。无 marker（旧版 pack）返回 null：不猜、不吵。
+const STALE_AFTER_HOURS = 12;
+function calcSyncStale(markerJson, now = Date.now()) {
+  const syncedAt = markerJson && Number(markerJson.syncedAt);
+  if (!Number.isFinite(syncedAt) || syncedAt > now) return null;
+  const ageHours = (now - syncedAt) / 3600e3;
+  return { syncedAt, ageHours: Math.round(ageHours * 10) / 10, active: ageHours > STALE_AFTER_HOURS };
+}
 // 云端额度回退（纯函数，导出供测试）：展示端密钥不落云 → 实时额度采集必失败；
 // 用主端 cloud-sync 推来的 quota-snapshot.json（deploy-pack 已剥 raw 的百分比/倒计时数据）顶位渲染。
 // 仅 30 分钟新鲜窗内生效（超时视为未同步，卡片保持隐藏而非挂过期数字）；只替换失败的源，
@@ -113,11 +124,13 @@ async function buildSnapshot() {
     quotaData[key] = data;
   });
 
-  // 云端额度回退：只读展示模式才启用（本机的 live 采集永远优先，绝不拿旧快照盖新数据）
+  // 云端额度回退：只读展示模式才启用（本机的 live 采集永远优先，绝不拿旧快照盖新数据）。
+  // 同一份 quota-snapshot.json 还携带主端 network 展示字段（下方网络卡回退复用）。
+  let qsJson = null;
   if (process.env.AI_QUOTA_HISTORY === 'readonly') {
     try {
-      const qsRaw = fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'quota-snapshot.json'), 'utf8');
-      applyQuotaSnapshotFallback(quotaData, JSON.parse(qsRaw));
+      qsJson = JSON.parse(fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'quota-snapshot.json'), 'utf8'));
+      applyQuotaSnapshotFallback(quotaData, qsJson);
     } catch { /* 无同步文件：保持采集器原降级 */ }
   }
 
@@ -203,6 +216,27 @@ async function buildSnapshot() {
     }
   }
 
+  // 云端陈旧感知（仅 readonly 展示端）：sync-marker 距上次成功同步的时长 → 前端陈旧横幅。
+  // 主端本机模式永不显示（数据就在本机产生，无「同步断供」概念）。
+  let syncStale = null;
+  if (process.env.AI_QUOTA_HISTORY === 'readonly') {
+    try {
+      syncStale = calcSyncStale(JSON.parse(fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'sync-marker.json'), 'utf8')));
+    } catch { /* 旧版 pack 无 marker：不猜不吵 */ }
+  }
+
+  // 云端网络卡回退：live netstat 采集是 macOS 专属（云端 Linux 必失败 → current 空、实时卡隐藏、
+  // 目标进度条空转）。用主端快照里的 network 展示字段顶位（同 30 分钟新鲜窗 + archived 标记，
+  // live 永远优先）；today/month 本身来自同步归档无需回退，仅 current（网络名+速率）走快照。
+  if (process.env.AI_QUOTA_HISTORY === 'readonly' && network && !network.current
+    && qsJson && Number.isFinite(qsJson.generatedAt) && Date.now() - qsJson.generatedAt < QUOTA_SNAPSHOT_FRESH_MS
+    && qsJson.network && qsJson.network.current) {
+    network = Object.assign({}, network, {
+      current: Object.assign({}, qsJson.network.current, { archived: true }),
+      error: null,
+    });
+  }
+
   return {
     builtAt: Date.now(),
     // 快照对外脱敏：quotaKeys 机密字段（accessToken 等）只出掩码形态，其余配置原样
@@ -219,9 +253,10 @@ async function buildSnapshot() {
     apiBilling: quotaData.apiBilling,
     vpnQuota: quotaData.vpnQuota,
     network,
+    syncStale,
     collectorErrors: errors,
     rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, codexSessions: csRows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length },
   };
 }
 
-module.exports = { buildSnapshot, applyQuotaSnapshotFallback, QUOTA_SNAPSHOT_FRESH_MS };
+module.exports = { buildSnapshot, applyQuotaSnapshotFallback, calcSyncStale, QUOTA_SNAPSHOT_FRESH_MS, STALE_AFTER_HOURS };

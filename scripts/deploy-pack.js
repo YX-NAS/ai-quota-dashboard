@@ -31,6 +31,9 @@ function extractQuotaSnapshot(summary, now = Date.now()) {
       out[key] = clone;
     }
   }
+  // network 只带 current（网络名+速率展示字段；today/month/series 云端从同步归档读，无需快照）
+  const cur = summary && summary.network && summary.network.current;
+  if (cur && cur.label) out.network = { current: cur };
   return out;
 }
 
@@ -95,6 +98,11 @@ async function main() {
       fs.writeFileSync(path.join(OUT, 'quota-snapshot.json'), JSON.stringify(qs, null, 2) + '\n');
     }
   } catch { /* 服务未运行：不阻塞打包 */ }
+
+  // ⑤ 同步标记：syncedAt = 本轮打包时刻。云端陈旧判定唯一依据——只有「pack 成功 + rsync 送达」
+  // 才刷新它（rsync 失败时云端留旧值），所以断网/断供期间云端能诚实显示「已陈旧 X 小时」，
+  // 而不是被主端"我以为我在同步"的自我声明骗过。阈值与展示端 snapshot.js STALE_AFTER_HOURS 一致
+  fs.writeFileSync(path.join(OUT, 'sync-marker.json'), JSON.stringify({ syncedAt: Date.now() }, null, 2) + '\n');
 
   const files = fs.readdirSync(OUT);
   console.log('云端包就绪 →', OUT);

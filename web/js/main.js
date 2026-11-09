@@ -50,9 +50,26 @@ async function load() {
   }
 }
 
+// ---------- 云端展示端陈旧横幅：主端同步断供超阈值时直说（数据可读只是旧，非错误态） ----------
+function renderStaleBanner() {
+  const el = document.getElementById('staleBanner');
+  if (!el) return;
+  const st = snap.syncStale;
+  if (st && st.active) {
+    el.hidden = false;
+    const when = new Date(st.syncedAt).toLocaleString('zh-CN');
+    el.innerHTML = `⚠️ 云端数据已 <b>${st.ageHours} 小时</b>未更新（最后一次成功同步：${when}）。`
+      + '本页是主机的只读展示端——请检查采集主机是否开机在线、其定时云同步是否在运行（scripts/cloud-sync.sh）。';
+  } else {
+    el.hidden = true;
+    el.innerHTML = '';
+  }
+}
+
 function render() {
   document.getElementById('updatedAt').textContent = '更新于 ' + new Date(snap.builtAt).toLocaleTimeString('zh-CN');
   renderOnboard();
+  renderStaleBanner();
   renderGoalBanner();
   renderKpis();
   renderCards();
