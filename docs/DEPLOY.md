@@ -102,6 +102,11 @@ server {
 */10 * * * * cd /path/to/ai-quota-dashboard && ./scripts/cloud-sync.sh quotauser@your.server:/srv/ai-quota-config >> /tmp/aqd-sync.log 2>&1
 ```
 
+macOS 用 launchd 更可靠（开机即载、睡眠唤醒后补跑）：plist 必须显式写
+`EnvironmentVariables.PATH`（含 `/opt/homebrew/bin`）——launchd 的最小 PATH 不含 Homebrew，
+否则脚本里的 `node` 找不到、每轮静默失败（exit 127，日志里只有一行 command not found）。
+装载后务必检查一次实际执行的退出码（`launchctl list | grep cloud-sync`），装载成功 ≠ 执行成功。
+
 - 归档用 SQLite `backup` API 导出**合并 WAL 的单文件**再 rsync——服务器 readOnly 打开不存在撕裂问题。
 - `plans.json` 只在服务器还没有时首次推送（尊重服务器侧独立改动），日常只同步数据。
 - 云端功能面：用量/费用/趋势/模型排行/网络流量历史/VPN 流量包卡（archived 标记，数据截至上次同步）
