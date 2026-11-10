@@ -312,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let toolNames: [String: String] = [
         "codex": "ChatGPT·Codex", "claudeDesktop": "Claude Desktop",
         "claudeCode": "Claude Code", "zcode": "ZCode", "workbuddy": "WorkBuddy",
+        "dsh": "DeepSeek Harness",
     ]
 
     // 当前生效的多巴胺配色：菜单固定为深色玻璃 + 亮色版色板。

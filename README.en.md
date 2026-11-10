@@ -81,6 +81,7 @@ Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `s
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | WorkBuddy | `~/.workbuddy-ai/projects/**/*.jsonl` |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.v4.jsonl.zstd` (multi-frame zstd) |
 
 | Real-time plan quotas (best-effort) | Credentials |
 |---|---|

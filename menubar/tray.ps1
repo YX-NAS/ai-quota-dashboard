@@ -130,7 +130,7 @@ function Update-State {
 
   $names = [ordered]@{
     codex = 'ChatGPT·Codex'; claudeDesktop = 'Claude Desktop'; claudeCode = 'Claude Code'
-    zcode = 'ZCode'; workbuddy = 'WorkBuddy'
+    zcode = 'ZCode'; workbuddy = 'WorkBuddy'; dsh = 'DeepSeek Harness'
   }
   $rows = @(); [int]$req = 0; [long]$tok = 0; [double]$cny = 0.0; [double]$pay = 0.0
   if ($day) {
@@ -238,6 +238,7 @@ function Rebuild-Menu {
   $orange = Get-Color 255 179 64
   $lime = Get-Color 181 255 64
   $violet = Get-Color 199 145 255
+  $sky = Get-Color 107 157 255
   $green = Get-Color 76 175 80
   $red = Get-Color 233 60 50
   $yellow = Get-Color 255 193 7
@@ -255,7 +256,7 @@ function Rebuild-Menu {
     # 工具行（多巴胺配色，与 macOS 菜单栏同款）
     $toolColors = @{
       'ChatGPT·Codex' = $lime; 'Claude Desktop' = $orange; 'Claude Code' = $pink
-      'ZCode' = $cyan; 'WorkBuddy' = $violet
+      'ZCode' = $cyan; 'WorkBuddy' = $violet; 'DeepSeek Harness' = $sky
     }
     foreach ($r in $st.toolRows) {
       $c = $toolColors[$r.name]; if (-not $c) { $c = $white }

@@ -14,6 +14,7 @@ const ccswitch = require('../collectors/ccswitch');
 const codexSessions = require('../collectors/codex-sessions');
 const workbuddy = require('../collectors/workbuddy');
 const claudecode = require('../collectors/claudecode');
+const deepseekHarness = require('../collectors/deepseek-harness'); // v1.7.4：dsh 会话（zstd JSONL）
 const chatgptQuota = require('../collectors/chatgpt-quota');
 const minimaxQuota = require('../collectors/minimax-quota');
 const zhipuQuota = require('../collectors/zhipu-quota');
@@ -54,14 +55,14 @@ async function buildSnapshot() {
   const plans = plansStore.load();
   const pricer = makePricer(plans);
 
-  const [zc, cc, wb, clc, cs] = [zcode.collect(), ccswitch.collect(), workbuddy.collect(), claudecode.collect(), codexSessions.collect()];
+  const [zc, cc, wb, clc, cs, dh] = [zcode.collect(), ccswitch.collect(), workbuddy.collect(), claudecode.collect(), codexSessions.collect(), deepseekHarness.collect()];
   // Codex 双源切换点：cc-switch（2026-10-15 起停更）与 ~/.codex/sessions 的重叠期只认前者，
   // 会话行仅取 cc-switch 末条之后 —— 防止两源对同一请求双计；cc-switch 恢复记录时自动跟随。
   let csRows = cs.rows;
   let ccCodexMax = 0;
   for (const r of cc.rows) if (r.tool === 'codex' && r.ts > ccCodexMax) ccCodexMax = r.ts;
   if (ccCodexMax > 0) csRows = csRows.filter(r => r.ts > ccCodexMax);
-  const rows = [...zc.rows, ...cc.rows, ...csRows, ...wb.rows, ...clc.rows].sort((a, b) => a.ts - b.ts);
+  const rows = [...zc.rows, ...cc.rows, ...csRows, ...wb.rows, ...clc.rows, ...dh.rows].sort((a, b) => a.ts - b.ts);
   const agg = aggregate(rows, pricer);
   const cmp = compareYesterday(rows, pricer);
   const vendors = vendorAggregate(rows, pricer); // API 按量计费：按服务商的今日/本月用量与费用（纯计算，恒有）
@@ -70,7 +71,7 @@ async function buildSnapshot() {
   const projectUsage = projectAggregate(rows, pricer); // 项目统计：今日占比/费用 + 全窗口累计总量（纯计算，恒有）
 
   const errors = {};
-  for (const [k, v] of Object.entries({ zcode: zc, ccswitch: cc, codexSessions: cs, workbuddy: wb, claudeCode: clc })) {
+  for (const [k, v] of Object.entries({ zcode: zc, ccswitch: cc, codexSessions: cs, workbuddy: wb, claudeCode: clc, deepseekHarness: dh })) {
     if (v.error) errors[k] = v.error;
   }
 
@@ -255,7 +256,7 @@ async function buildSnapshot() {
     network,
     syncStale,
     collectorErrors: errors,
-    rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, codexSessions: csRows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length },
+    rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, codexSessions: csRows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length, dsh: dh.rows.length },
   };
 }
 

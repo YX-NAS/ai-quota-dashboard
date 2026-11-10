@@ -1464,6 +1464,51 @@ t('readonly 新鲜度：归档文件被 rsync 覆盖（mtime/size 变）后连�
   history.close();
 });
 
+console.log('== DeepSeek Harness 会话采集（zstd JSONL schema 归一） ==');
+const dshCollector = require('../server/collectors/deepseek-harness');
+
+t('parseText：assistant/message usage 行归一（disjoint inputTokens / source 模型 / 平铺 session 头项目）', () => {
+  const now = Date.now();
+  const text = [
+    JSON.stringify({ type: 'session', version: 4, id: 's1', createdAt: 1, cwd: '/Users/x/proj-demo' }),
+    JSON.stringify({ type: 'permission/preset', seq: 0, time: 2, data: { preset: 'workspace-write' } }),
+    JSON.stringify({ type: 'request/context', seq: 1, time: 3, data: { provider: 'deepseek', model: 'deepseek-v4-pro' } }),
+    JSON.stringify({ type: 'assistant/message', seq: 2, time: now - 60000, data: {
+      turn: 0, step: 0,
+      message: { content: [], source: { provider: 'deepseek', model: 'deepseek-v4-pro' } },
+      usage: { inputTokens: 10000, outputTokens: 800, cacheReadTokens: 5000, reasoningTokens: 200 } } }),
+    JSON.stringify({ type: 'assistant/message', seq: 3, time: now - 50000, data: {
+      turn: 0, step: 1,
+      message: { content: [], source: {} }, // source 缺 model → 回退最近 request/context
+      usage: { inputTokens: 3000, outputTokens: 100 } } }),
+    'not-json{{', // 坏行计 parseErrors
+    JSON.stringify({ type: 'assistant/message', seq: 5, time: now - 40000, data: { turn: 1, message: {} } }), // 无 usage 不计
+  ].join('\n');
+  const p = dshCollector.parseText(text, '/fake/s.v4.jsonl.zstd', now - 365 * 86400e3);
+  assert.equal(p.rows.length, 2);
+  assert.equal(p.parseErrors, 1, '坏行计数留痕');
+  const r0 = p.rows[0];
+  assert.equal(r0.tool, 'dsh');
+  assert.equal(r0.providerId, 'deepseek');
+  assert.equal(r0.model, 'deepseek-v4-pro');
+  assert.equal(r0.inputTokens, 10000);
+  assert.equal(r0.cacheReadTokens, 5000);
+  assert.equal(r0.project, '/Users/x/proj-demo');
+  assert.equal(r0.projectLabel, 'proj-demo');
+  assert.equal(r0.dedupKey, '/fake/s.v4.jsonl.zstd#2');
+  assert.equal(p.rows[1].model, 'deepseek-v4-pro', '缺 source.model 回退 request/context 最近模型');
+  // 时间下界过滤
+  assert.equal(dshCollector.parseText(text, '/f', now).rows.length, 0, 'afterMs 下界外全滤');
+});
+
+t('collect：目录不存在静默零数据；真实 ~/.dsh 冒烟不抛（未装 dsh 用户路径）', () => {
+  const r = dshCollector.collect('/nonexistent-dsh-root');
+  assert.deepEqual(r.rows, []);
+  assert.equal(r.error, null, '未安装 = 正常零数据不报错');
+  const live = dshCollector.collect();
+  assert.ok(Array.isArray(live.rows) && live.error === null || typeof live.error === 'string', '本机冒烟形态合法');
+});
+
 console.log('== report：周/月报生成器 ==');
 const { buildReport, weekStart } = require('../server/lib/report');
 const NOW = Date.UTC(2026, 9, 7, 4, 0); // 北京 2026-10-07（周三）12:00 → 本周 = 10-05（周一）~ 10-11（周日）
@@ -2097,7 +2142,7 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     const s = await buildSnapshot();
     assert.ok(Number.isFinite(s.builtAt));
     assert.ok(s.agg && typeof s.agg.daily === 'object' && typeof s.agg.models === 'object');
-    assert.deepEqual(Object.keys(s.rowStats).sort(), ['ccswitch', 'claudeCode', 'codexSessions', 'workbuddy', 'zcode']);
+    assert.deepEqual(Object.keys(s.rowStats).sort(), ['ccswitch', 'claudeCode', 'codexSessions', 'dsh', 'workbuddy', 'zcode']);
     for (const v of Object.values(s.rowStats)) assert.ok(Number.isInteger(v) && v >= 0, `rowStats 应为非负整数，got ${v}`);
     assert.ok(typeof s.collectorErrors === 'object');
     for (const v of Object.values(s.collectorErrors)) assert.equal(typeof v, 'string');

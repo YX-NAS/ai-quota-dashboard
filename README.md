@@ -86,6 +86,7 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 | Claude Code | `~/.claude/projects/**/*.jsonl` |
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | WorkBuddy | `~/.workbuddy-ai/projects/**/*.jsonl` |
+| DeepSeek Harness | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（zstd 多帧会话） |
 
 | 套餐实时额度（查得到就显示，查不到就跳过） | 凭证从哪来 |
 |---|---|

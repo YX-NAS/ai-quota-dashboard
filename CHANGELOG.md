@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.4] - 2026-11-10
+
+### 🧰 新数据源：DeepSeek Harness（dsh）客户端用量监控
+
+- **新增 `server/collectors/deepseek-harness.js`**：读 `~/.dsh/sessions/<项目>/session-<uuid>/session.v4.jsonl.zstd`（dsh 官方会话持久化，schema 逆向自 `@deepseek-ai/dsh-session-persistence-jsonl` 源码并实测验证）。每次模型请求一行：`assistant/message` 的 `usage`（inputTokens 已剔缓存读的 disjoint 口径 / outputTokens 含思考 / cacheRead / reasoning）+ `message.source.{provider,model}`；项目取会话头 `cwd`，子代理会话一并计入。
+- **zstd 解码正确性红线**：Node zlib 的 zstd API 对**多帧拼接流只解第一帧且不报错**（dsh 恰是每批追加一帧的多帧格式——若直接用会静默丢数据）。顺序定为：系统 zstd CLI 全量多帧解码为主路径（含 Homebrew 绝对路径兜底），zlib 仅在帧扫描判定单帧文件时作回退，多帧无 CLI 如实报错、绝不半读。
+- 成本口径：DeepSeek 充值按量直连，无成本字段按单价表等价核算（v4-pro/flash 单价已收录）；`providerId` 归因进服务商/按量统计；工具卡、每日趋势、模型排行、项目统计、周报、菜单栏/托盘、云端归档同步全链路自动接入。
+- 测试 +2（会话 schema 归一/下界/回退模型/坏行留痕；未装目录静默零数据），共 **218 passed**。
+
 ## [1.7.3] - 2026-11-09
 
 ### 🛡️ 云同步可靠性四层防线（断供 3 天静默失败的根治）

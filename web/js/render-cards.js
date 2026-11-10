@@ -12,6 +12,7 @@ export const TOOLS = [
   { key: 'claudeCode', name: 'Claude Code', sub: true, planName: 'cc-switch 路由（按模型计价）', color: '#ed8796' },
   { key: 'zcode', name: 'ZCode', sub: true, planName: '智谱 API 按量计费', color: '#a6da95' },
   { key: 'workbuddy', name: 'WorkBuddy', sub: true, planName: '订阅套餐（自定义模型）', color: '#eed49f' },
+  { key: 'dsh', name: 'DeepSeek Harness', planName: 'DeepSeek API 直连（充值按量）', color: '#4d6bfe' },
 ];
 
 // 套餐实时额度卡（5h / 周窗口）
