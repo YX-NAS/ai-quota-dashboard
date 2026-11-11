@@ -9,9 +9,9 @@
 
 **每天用 AI 写代码，但你可能说不清：今天烧了多少钱？智谱的 5 小时窗口还剩多少？这个月照这么用下去得花多少？**
 
-这个看板把这些问题变成一屏数字。它蹲在你的电脑里，默默读着 ZCode、Claude Code、Codex、WorkBuddy 的本地记录，算好每一分钱（等价成本）、盯紧每一个额度窗口——**不联网上传任何东西**。
+这个看板把这些问题变成一屏数字。它蹲在你的电脑里，默默读着 ZCode、Claude Code、Codex、WorkBuddy、DeepSeek Harness 的本地记录，算好每一分钱（等价成本）、盯紧每一个额度窗口——**不联网上传任何东西**。
 
-![看板总览：当日目标成本横幅 + 今日 KPI + 五个工具卡片](docs/screenshots/dashboard.png)
+![看板总览：当日目标成本横幅 + 今日 KPI + 工具卡片](docs/screenshots/dashboard.png)
 
 ## 它长这样
 
@@ -31,11 +31,11 @@
 
 ## ✨ 它能干什么
 
-- 💸 **今天花了多少**：五张工具卡片，今日 / 本月 / 本周费用一目了然；订阅制工具自动折算「等价成本」，和真扣费的工具放在一起比
+- 💸 **今天花了多少**：六张工具卡片，今日 / 本月 / 本周费用一目了然；订阅制工具自动折算「等价成本」，和真扣费的工具放在一起比
 - ⏳ **额度还剩多少**：ChatGPT、智谱 Coding Plan、MiniMax 的 5 小时窗口和周额度实时进度条，>60% 变黄、>85% 变红，带重置倒计时
 - 📈 **照这么用下去要花多少**：月底线性预估；30 天堆叠趋势图 + 每日明细（7/30/90 天 + 全部·归档切换）
 - 💾 **历史不丢**：每日聚合自动沉淀进本地 SQLite 归档库（`config/history.sqlite`），工具原始日志被清理后照样能翻「全部（归档）」，最多看 10 年
-- 📣 **额度预警推送**：5h 窗口 / 周窗口 / 当日目标逼近阈值时推到手机（ntfy / Bark / Server酱 / 通用 Webhook），带冷却防轰炸；推送内容只有百分比和倒计时，不含任何密钥
+- 📣 **额度预警推送**：5h 窗口 / 周窗口 / 当日目标逼近阈值时推到手机（企业微信 / ntfy / Bark / Server酱 / 通用 Webhook），带冷却防轰炸；推送内容只有百分比和倒计时，不含任何密钥
 - 📊 **周报 · 月报**：一键生成七节 Markdown 报告（成本环比 / 工具榜 / 模型榜 Top5 / 预算达成率），复制即贴周会，也可下载 .md
 - 📤 **数据带得走**：每日明细 / 模型费用一键导出 CSV，整份快照导出 JSON——数据属于你
 - 🎯 **当日目标成本**：给每天定个 ¥200 的成本目标，横幅里看剩余预算、预计用完时间，菜单栏看百分比，用完/超支弹系统通知提醒（💸）
@@ -95,6 +95,8 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 | MiniMax Token Plan（5h + 周） | `~/.workbuddy-ai/models.json` 自动发现，或手动填 |
 
 没装的工具？零用量的卡片自动折叠成一行「未启用的工具」，查不到凭证的额度卡干脆不出现，绝不给你看假错误。
+
+> DeepSeek Harness 的会话是**多帧 zstd**：需要系统 `zstd`（macOS `brew install zstd`）。Node ≥23.8 的内建 zlib 只能解单帧——多帧流它只读第一帧且不报错，所以采集器强制走 CLI，没装 zstd 时该卡会显示采集失败而不是悄悄少算。
 
 每周 / 每月的账也一样清楚：内置**周报 · 月报**，一键复制七节 Markdown 报告（详见[图文手册](docs/USER_GUIDE.md)）。
 
@@ -170,10 +172,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File desktop\widget.ps1   # 桌�
   "dailyGoal": { "cny": 200 },          // 当日目标成本
   "alerts": {                           // 额度预警推送（默认关闭，字段说明见手册）
     "enabled": false,
-    "webhookType": "ntfy",              // ntfy | bark | serverchan | generic
+    "webhookType": "ntfy",              // wecom | ntfy | bark | serverchan | generic
     "webhookUrl": "",
-    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
-    "cooldownMinutes": 60
+    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100, "vpnUsed": 90 },
+    "cooldownMinutes": 60,
+    "digest": { "enabled": false, "hour": 21 },   // 每日摘要（走同一通道）
+    "reportPush": {                     // 周报 / 月报定时推送
+      "week": { "enabled": false, "hour": 9 },
+      "month": { "enabled": false, "hour": 9 }
+    }
   }
 }
 ```
@@ -230,7 +237,7 @@ node 首次监听端口时 Windows 会问一次「允许访问」，点允许即
 ## 🗺️ Roadmap
 
 - ✅ 历史数据持久化（v1.5 已交付）：每日聚合写入本地 SQLite，原始日志清理后历史不丢
-- ✅ 额度预警全端可配置（v1.5 已交付）：四通道推送与阈值进设置面板
+- ✅ 额度预警全端可配置（v1.5 已交付，v1.7 增企业微信）：五通道推送与阈值进设置面板
 - ✅ v1.6 已交付：Web UI 数据看板重设计 · 在线更新模型单价（价格源 JSON）· 工具卡片显隐 · `/Applications` 一键启动器
 - ✅ v1.7 已交付：网络流量按网络聚合（目标进度条）· VPN 流量包额度与续订预警 · 登录鉴权 + 域名/云端零密钥部署 · 站内通知中心 · 缺失模型单价自动补充 · Codex 官方会话采集 · 套餐性价比对比
 - **Web 端英文化**：界面 i18n（当前 README.en 读者点进来是中文 UI，欢迎 PR）

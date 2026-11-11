@@ -1,6 +1,6 @@
 # AI 工具额度看板 · 设计文档
 
-> 版本 v1.5 · 2026-10 · 项目名：ai-quota-dashboard
+> 版本 v1.7.4 · 2026-11 · 项目名：ai-quota-dashboard（v1.5 基线 + §10.3–10.6 增量）
 
 ## 1. 目标
 
@@ -16,8 +16,10 @@
 |---|---|---|---|
 | ZCode | `~/.zcode/cli/db/db.sqlite` → `model_usage` 表 | input/output/reasoning/cache_creation/cache_read tokens、provider_id、model_id、started_at(ms)、**status（只计 completed）** | Node 22 `node:sqlite` `readOnly:true` 直连，不做 checkpoint、不写 -wal。**套餐：智谱 Coding Plan（团队版）** |
 | ChatGPT / Codex | `~/.cc-switch/cc-switch.db` → `proxy_request_logs` | input/output/cache_read/cache_creation tokens、model、**app_type（codex / claude-desktop 两种，必须拆开）**、total_cost_usd、created_at(s) | 时间戳为**秒**，`date(created_at,'unixepoch','+8 hours')` 转北京时间。**不用 usage_daily_rollups**（与明细对不上，语义混杂，双算风险）。**套餐：ChatGPT 订阅** |
+| Codex 官方会话 | `~/.codex/sessions/**/*.jsonl`（rollout） | `event_msg/token_count` 的 `info.last_token_usage`（本次调用增量）、`turn_context.model/cwd`、timestamp | 2026-10-15 起 cc-switch 停记 Codex，snapshot 以 cc-switch 末条时间为切换点接续，避免重叠期双计；无成本字段，GPT 订阅按单价表等价核算 |
 | Claude Code | `~/.claude/projects/**/*.jsonl` → `message.usage` | input/output/cache_creation/cache_read tokens、model（cc-switch 路由）、timestamp(ISO) | `<synthetic>` 消息不计；按 (file, msg.id, model) 去重。**成本 = 等价按量成本** |
 | WorkBuddy | `~/.workbuddy-ai/projects/**/*.jsonl` 行内 `providerData.usage` | inputTokens/outputTokens/cached_tokens（或 rawUsage.prompt_cache_hit_tokens）、model、timestamp(ms) | 同一消息可能多行，按 `(file, messageId, model)` 去重。**套餐：订阅制（自定义模型）** |
+| DeepSeek Harness | `~/.dsh/sessions/<项目>/session-<uuid>/session.v4.jsonl.zstd`（多帧 zstd JSONL） | `assistant/message` 的 `usage`（inputTokens 已剔缓存读的 disjoint 口径 / outputTokens 含思考 / cacheRead / reasoning）、`message.source.{provider,model}`、会话头 `cwd` | 系统 zstd CLI 全量解码多帧（Homebrew 绝对路径兜底）；Node zlib 仅在单帧时回退——多帧只解首帧且不报错，禁止使用。无成本字段按单价表等价核算，`providerId` 进服务商/按量统计，子代理会话全计入 |
 | ChatGPT 实时额度 | `~/.codex/auth.json` 的 OAuth access_token → `chatgpt.com/backend-api/wham/usage` | 套餐 rate-limit 窗口（5h/周/月） | 尽力而为：失败不阻塞，卡片显示「实时额度不可用」 |
 | 智谱 Coding Plan 实时额度（团队版） | `open.bigmodel.cn/api/monitor/usage/quota/limit?type=2` + `bigmodel-organization`/`bigmodel-project` 头 | limits[]：unit3+number5 = 5h 窗口，unit6 = 周窗口（TOKENS/CREDIT_LIMIT，含 percentage 与 nextResetTime）；org/project 经 `/api/biz/customer/getCustomerInfo` 枚举 projectType=2 项目后试取 | 凭证按序：**plans.json `quotaKeys.zhipu`（设置面板手动配置，优先）** → ZCode OAuth（`~/.zcode/v2/credentials.json`，enc:v1 AES-256-GCM 本机可解）→ WorkBuddy GLM key → ZCode config key；org/project 手动配置优先，其次落盘缓存 `config/.zhipu-team-context.json`，OAuth 失效时凭 key+缓存继续查询 |
 | MiniMax 实时额度 | `www.minimaxi.com/v1/api/openplatform/coding_plan/remains` | model_remains[]（general 通道的 5h/周剩余） | key 按序：plans.json `quotaKeys.minimax` → `~/.workbuddy-ai/models.json` 自动发现 |
@@ -26,7 +28,7 @@
 | Kimi API 按量计费余额 | `api.moonshot.cn/v1/users/me/balance` | `data.available_balance / cash_balance / voucher_balance` | key 按序：ZCode 自定义供应商（moonshot-kimi）→ plans.json `quotaKeys.moonshot` → cc-switch 'Kimi' 行 → WorkBuddy |
 | ZCode 自定义服务商发现 + Key 健康检测 | `~/.zcode/v2/provider_config.json`（`server/lib/zcode-providers.js`，mtime 缓存随快照重读）→ 逐 provider 探活 `GET {base}/models`（anthropic-messages 型 base+`/v1/models` 走 x-api-key） | providerId/label/vendor/billingKind(按量·订阅)/models/keyMasked + keyChecks{ok,reason,checkedAt} | 「API 按量计费」区块的服务商卡片以此列表为准（增删服务商 ≤60s 自动跟上）；`sk-cp-` 前缀或 coding/start-plan 特征 = 订阅不查金额余额；探活不耗额度，只读 |
 | 阿里云百炼账户余额 | BSS OpenAPI `business.aliyuncs.com/?Action=GetAccountBalance`（RPC HMAC-SHA1 签名，`server/collectors/api-billing.js`） | `Data.AvailableAmount/BalanceAmount/CreditAmount/Currency` | DashScope **无**按量余额接口（实测端点全 404）；需阿里云 AccessKey（plans.json `quotaKeys.bailian`，Secret 脱敏存储），未配置时卡片只显示用量费用 |
-| 按服务商用量/费用 | 本机四采集器 rows × `vendorForRow`（`server/lib/store.js` `vendorAggregate`） | 各服务商今日/本月 requests、tokens、costCny | **归因以行的 `provider_id` 为准**（ZCode 采集器随行携带），订阅制 provider（`account:*`/coding-plan/start-plan）返回 null 不进按量桶；无 provider 的行回退模型名规则（`vendorOf`：glm→zhipu、MiniMax→minimax、deepseek、kimi/moonshot、qwen/qwq/tongyi→bailian、claude、gpt/codex）。百炼托管三方模型因此归 bailian。纯计算恒有（快照 `vendors` 字段），独立于 agg/历史归档；cc-switch 行真实 costUsd 直接采信，其余按单价表等价计费 |
+| 按服务商用量/费用 | 本机六采集器 rows × `vendorForRow`（`server/lib/store.js` `vendorAggregate`） | 各服务商今日/本月 requests、tokens、costCny | **归因以行的 `provider_id` 为准**（ZCode 采集器随行携带），订阅制 provider（`account:*`/coding-plan/start-plan）返回 null 不进按量桶；无 provider 的行回退模型名规则（`vendorOf`：glm→zhipu、MiniMax→minimax、deepseek、kimi/moonshot、qwen/qwq/tongyi→bailian、claude、gpt/codex）。百炼托管三方模型因此归 bailian。纯计算恒有（快照 `vendors` 字段），独立于 agg/历史归档；cc-switch 行真实 costUsd 直接采信，其余按单价表等价计费 |
 
 口径说明：
 - ZCode（bigmodel coding plan）与 WorkBuddy 自定义模型（GLM Coding Plan / MiniMax Token Plan）为**订阅套餐**，不按 token 扣费 → 展示「等价按量成本」+ 用户可配置的套餐额度。**2026-10-30 起智谱团队套餐已停用，转为 API 按量计费**（智谱个人账户 + DeepSeek 等，见「API 按量计费」区块）。
@@ -51,16 +53,21 @@ ai-quota-dashboard/
 │   └── collectors/
 │       ├── zcode.js        # ~/.zcode SQLite 只读采集（行带 provider_id 供计费归因）
 │       ├── ccswitch.js     # ~/.cc-switch/cc-switch.db 采集
+│       ├── codex-sessions.js # ~/.codex/sessions jsonl 采集（v1.7 接续 cc-switch 停更）
 │       ├── claudecode.js   # ~/.claude jsonl 采集
 │       ├── workbuddy.js    # ~/.workbuddy-ai jsonl 采集
+│       ├── deepseek-harness.js # ~/.dsh 多帧 zstd 会话采集（v1.7.4）
 │       ├── chatgpt-quota.js# ChatGPT 实时额度（尽力而为）
 │       ├── minimax-quota.js# MiniMax 实时额度
 │       ├── zhipu-quota.js  # 智谱 Coding Plan 实时额度（团队版，2026-10-30 起套餐停用）
 │       ├── api-billing.js  # API 按量计费：各家余额（智谱/DeepSeek/Kimi/阿里云BSS）+ 逐服务商 Key 探活
-│       └── network-traffic.js # 网络流量采集（macOS 专属）：netstat -ib 差分 + SSID/端口名归因
+│       ├── network-traffic.js # 网络流量采集（macOS 专属）：netstat -ib 差分 + SSID/端口名归因
+│       └── vpn-quota.js    # VPN 订阅头流量包额度（v1.7）
 ├── web/
 │   ├── index.html          # 单页看板
-│   └── app.js + style.css
+│   ├── login.html          # 云端登录页（自包含）
+│   ├── js/                 # main / state / render-cards / tables / network / settings …
+│   └── style.css
 ├── mcp/mcp.js              # MCP Server（兼 CLI）
 ├── menubar/                # macOS 菜单栏 menubar.swift + Windows 托盘 tray.ps1
 ├── desktop/                # macOS 桌面组件 desktop-widget.swift + Windows 卡片 widget.ps1
@@ -118,7 +125,7 @@ ai-quota-dashboard/
 ## 8. 页面设计（暗色/日间双主题，跟随系统；靛蓝主色渗透中性色，明快亲和）
 
 1. 顶部：总览 KPI（今日请求 / 今日 token / 今日成本 / 本月成本）
-2. 工具卡片区（ChatGPT·Codex / Claude Desktop / ZCode / WorkBuddy）：今日与本月用量、成本、额度进度条、**本月预估（按已过天数线性外推）**、数据新鲜度
+2. 工具卡片区（ChatGPT·Codex / Claude Desktop / Claude Code / ZCode / WorkBuddy / DeepSeek Harness）：今日与本月用量、成本、额度进度条、**本月预估（按已过天数线性外推）**、数据新鲜度
 3. 每日明细表：日期 × 工具 → 请求/token/费用，支持最近 7/30 天切换
 4. 趋势图：30 天堆叠柱状（纯 SVG，无外部依赖）
 5. 设置抽屉：编辑各工具套餐额度、汇率、单价覆盖
@@ -132,7 +139,7 @@ ai-quota-dashboard/
 - **端口冲突**：7788 被占则自动 +1 并在终端打印实际地址
 - **口径标注（审核 P1-6/7）**：Codex 金额保留 USD 原值并列示「按汇率 X 折算为 ¥Y」；ZCode/WorkBuddy 卡片显著标注「订阅制 · 等价按量成本，非实际扣费」
 
-## 10. v1.5 持久化与预警
+## 10. v1.5 持久化与预警（含后续 v1.7 增量）
 
 ### 10.1 历史归档库（`config/history.sqlite`）
 
@@ -200,3 +207,11 @@ ai-quota-dashboard/
 - **今日用量**：累计计数器差值 = 增量，基线存 `config/vpn-state.json`（原子写，服务重启不双计）；增量累加进 `daily_vpn(date PK, used_bytes, total_bytes, expire_at)`（SQL 累加 + COALESCE 覆盖元数据）。
 - **预警**：`alerts.evaluate` 第 8 类事件 `kind:'vpn'`，阈值 `thresholds.vpnUsed`（默认 90 = 已用%），冷却 key `vpn|北京日期`；≥99% critical。wecom `renderCard` 有 vpn 分支（剩余流量%+消息行），原始字节不进卡片避免 fmtNum 误导。
 - **前端**：「套餐统计」区 VPN 卡（`render-cards.js`）：已用%进度条（档位同额度条）+ 剩余/到期（`Math.floor` 天与面板同口径）+ 今日/累计；未配置 skip 不渲染，失败态复用额度失败行。
+
+### 10.6 DeepSeek Harness 会话采集（v1.7.4，`server/collectors/deepseek-harness.js`）
+
+- **数据源**：`~/.dsh/sessions/<项目slug>/session-<uuid>/session.v4.jsonl.zstd`（dsh 官方会话持久化）。首行 `type:"session"` 带 `cwd`（项目归因）；每次模型请求完成追加一行 `type:"assistant/message"`，`data.usage = { inputTokens（已剔缓存读）, outputTokens（含思考）, cacheReadTokens?, reasoningTokens? }`，模型/服务商在 `data.message.source.{provider,model}`。
+- **多帧 zstd 红线**：dsh 每批追加一个 zstd 帧。系统 `zstd -dc` 全量解码为主路径（含 `/opt/homebrew/bin/zstd` 等绝对路径兜底，launchd 环境 PATH 可能不含 Homebrew）；Node `zlib.zstdDecompressSync` 对多帧**只解首帧且不报错**，因此仅当帧扫描（`0x28B52FFD` 魔数计数）判定单帧时才回退；多帧无 CLI 返回 null 并记 `collectorErrors.dsh`，绝不半读。
+- **归一**：一条 `assistant/message` = 一次请求；`inputTokens` 已是净额、缓存读单列（与 codex-sessions 同口径）；`costUsd` 为 null，按单价表（deepseek-v4 系）等价核算；`providerId=source.provider` 进服务商/按量归因；`cwd` 进项目统计；子代理（`delegationDepth>0`）会话同样计入真实消耗。
+- **容错**：文件未变（mtime+size 同）复用解析缓存；坏行计数但保留其余行；单会话解压上限 256MB；未装 dsh（目录不存在）静默零数据。
+- **依赖**：macOS 需 `brew install zstd`（README / USER_GUIDE 已注明）；Node ≥23.8 内建 zlib 仅作单帧回退。

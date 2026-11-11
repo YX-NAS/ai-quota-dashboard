@@ -40,6 +40,9 @@
 | Claude Code | 本地 `~/.claude` 记录 |
 | ZCode | 本地 `~/.zcode` 数据库 |
 | WorkBuddy | 本地 `~/.workbuddy-ai` 记录 |
+| DeepSeek Harness | 本地 `~/.dsh` 会话记录（多帧 zstd，需系统 `zstd`） |
+
+> DeepSeek Harness 的会话文件是多帧 zstd，macOS 先跑一次 `brew install zstd`（Node ≥23.8 的内建 zlib 只能解单帧，采集器会优先用系统 zstd）。没装时看板会在采集状态里提示，不会悄悄少算。
 
 它只读取本机文件，不上传任何数据。想卸载也简单：关掉服务、删掉项目文件夹即可，不留任何残留。
 

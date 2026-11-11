@@ -9,6 +9,9 @@ config/*.sqlite*
 config/notifications.json
 config/network-state.json
 config/vpn-state.json
+config/sync-state.json
+# 本地记忆索引（memsearch，会话工具自产）
+.memsearch/
 
 # macOS
 .DS_Store

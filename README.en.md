@@ -9,7 +9,7 @@
 
 **You use AI coding tools every day — but can you answer: how much did today cost? How much of your Zhipu 5-hour window is left? What will this month cost at the current pace?**
 
-This dashboard turns those questions into one screen of numbers. It quietly reads the local records of ZCode, Claude Code, Codex and WorkBuddy on your machine, prices every request, and watches every quota window — **nothing ever leaves your computer**.
+This dashboard turns those questions into one screen of numbers. It quietly reads the local records of ZCode, Claude Code, Codex, WorkBuddy and DeepSeek Harness on your machine, prices every request, and watches every quota window — **nothing ever leaves your computer**.
 
 ![Dashboard overview: daily cost target banner + KPIs + per-tool cards](docs/screenshots/dashboard.png)
 
@@ -31,7 +31,7 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 
 - 💸 **Today's spend**: one card per tool with today / week / month costs; subscription tools get an "equivalent pay-as-you-go" estimate so they're comparable with metered ones
 - 💾 **History that survives**: daily aggregates persist into a local SQLite archive (`config/history.sqlite`) — even after source logs rotate away, the "All (archived)" view keeps up to 10 years
-- 📣 **Quota alerts to your phone**: push via ntfy / Bark / ServerChan / generic webhook when 5h / weekly windows or the daily target approach their thresholds, with a cooldown against spam; payloads carry percentages, amounts and countdowns only — never keys or token details
+- 📣 **Quota alerts to your phone**: push via WeCom (WeChat Work) / ntfy / Bark / ServerChan / generic webhook when 5h / weekly windows or the daily target approach their thresholds, with a cooldown against spam; payloads carry percentages, amounts and countdowns only — never keys or token details
 - 📊 **Weekly & monthly reports**: a seven-section Markdown report (costs vs last period / tool ranking / top-5 models / budget attainment) in one click — copy it into your weekly meeting or download as .md
 - 🎯 **Daily cost target**: set a ¥200/day budget and track remaining budget plus projected exhaustion time in the banner, the percentage in the menu bar, and a system notification when it's used up (💸)
 - 🆚 **vs yesterday**: same-time and full-day comparison, so you can tell at a glance whether today is burning faster
@@ -90,6 +90,8 @@ Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `s
 | MiniMax Token Plan (5h + weekly) | auto-discovered from `~/.workbuddy-ai/models.json`, or set manually |
 
 A tool you don't use? Zero-usage cards collapse into a single "idle tools" row, and quota cards without credentials never render — no fake error cards, ever.
+
+> DeepSeek Harness sessions are **multi-frame zstd**: they need the system `zstd` binary (macOS: `brew install zstd`). Node ≥23.8's built-in zlib decodes single frames only — on multi-frame streams it silently returns the first frame, so the collector always prefers the CLI and reports an error instead of under-counting when it is missing.
 
 Weekly and monthly bills are covered too: built-in **weekly / monthly reports** render a seven-section Markdown summary in one click (see the user guide).
 
@@ -165,10 +167,15 @@ Everything lives in `config/plans.json` (auto-generated; excluded by gitignore; 
   "dailyGoal": { "cny": 200 },
   "alerts": {
     "enabled": false,                   // quota alert push (off by default)
-    "webhookType": "ntfy",              // ntfy | bark | serverchan | generic
+    "webhookType": "ntfy",              // wecom | ntfy | bark | serverchan | generic
     "webhookUrl": "",
-    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100 },
-    "cooldownMinutes": 60
+    "thresholds": { "fiveHour": 85, "weekly": 85, "dailyGoalPct": 100, "vpnUsed": 90 },
+    "cooldownMinutes": 60,
+    "digest": { "enabled": false, "hour": 21 },   // daily digest (same channel)
+    "reportPush": {                     // weekly / monthly scheduled pushes
+      "week": { "enabled": false, "hour": 9 },
+      "month": { "enabled": false, "hour": 9 }
+    }
   }
 }
 ```

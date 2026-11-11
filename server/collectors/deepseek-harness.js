@@ -9,8 +9,9 @@
 // 缓存命中另列，聚合不会双计。子代理（delegationDepth>0）会话同样落盘——真实消耗，全部计入。
 // 成本：dsh 走 DeepSeek API/账户直付，行无成本字段 → costUsd null 按单价表等价核算（pricing 已收录
 // deepseek-v4 系），providerId=source.provider 进服务商/按量口径归因。
-// 解码双路径：Node ≥23.8 内建 zlib.zstdDecompressSync（主路径，无进程开销）；
-// 更低版本回退系统 zstd CLI；两者皆无记 error（不抛，快照降级留痕）。
+// 解码双路径：系统 zstd CLI 为多帧流主路径（Homebrew 绝对路径兜底，launchd 环境 PATH
+// 不含 /opt/homebrew/bin 也能用）；Node ≥23.8 的 zlib.zstdDecompressSync 只在帧扫描判定
+// 单帧时回退——多帧流它只解首帧且不报错，绝不用于多帧；两者皆无记 error（不抛，快照降级留痕）。
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');

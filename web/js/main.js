@@ -96,7 +96,7 @@ function renderOnboard() {
     <div class="glass onboard">
       <div class="onboard-head">
         <b class="onboard-title">第一次使用</b>
-        <span class="mut onboard-msg">看板读取的是本机工具的使用记录：ZCode · Claude Code · Claude Desktop · ChatGPT·Codex(cc-switch) · WorkBuddy。装好并用上任意一个，数据 1 分钟内自动出现；额度卡需要对应套餐的凭证（设置里可配）。</span>
+        <span class="mut onboard-msg">看板读取的是本机工具的使用记录：ZCode · Claude Code · Claude Desktop · ChatGPT·Codex(cc-switch) · WorkBuddy · DeepSeek Harness。装好并用上任意一个，数据 1 分钟内自动出现；额度卡需要对应套餐的凭证（设置里可配）。</span>
         <button id="onboardOk" class="btn">知道了</button>
       </div>
     </div>`;
