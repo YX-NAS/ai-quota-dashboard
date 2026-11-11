@@ -1,6 +1,6 @@
 # AI 工具额度看板 · 设计文档
 
-> 版本 v1.7.4 · 2026-11 · 项目名：ai-quota-dashboard（v1.5 基线 + §10.3–10.6 增量）
+> 版本 v1.8.0 · 2026-11 · 项目名：ai-quota-dashboard（v1.5 基线 + §10.3–10.7 增量）
 
 ## 1. 目标
 
@@ -124,11 +124,15 @@ ai-quota-dashboard/
 
 ## 8. 页面设计（暗色/日间双主题，跟随系统；靛蓝主色渗透中性色，明快亲和）
 
+0. 今日速览（`#todaySummary`，v1.8）：目标横幅下的一行结论——昨日同期涨跌 / 全天预计（超目标标黄）/ 今日主要花钱工具及占比 / 额度最紧的窗口 / 近 7 天日均 1.8 倍异常提示；任一维度无数据则整条不显示
 1. 顶部：总览 KPI（今日请求 / 今日 token / 今日成本 / 本月成本）
-2. 工具卡片区（ChatGPT·Codex / Claude Desktop / Claude Code / ZCode / WorkBuddy / DeepSeek Harness）：今日与本月用量、成本、额度进度条、**本月预估（按已过天数线性外推）**、数据新鲜度
+2. 工具卡片区（ChatGPT·Codex / Claude Desktop / Claude Code / ZCode / WorkBuddy / DeepSeek Harness）：今日与本月用量、成本、额度进度条、**本月预估（日历天 + 当日进度外推，见 §10.7）**、数据新鲜度
 3. 每日明细表：日期 × 工具 → 请求/token/费用，支持最近 7/30 天切换
 4. 趋势图：30 天堆叠柱状（纯 SVG，无外部依赖）
-5. 设置抽屉：编辑各工具套餐额度、汇率、单价覆盖
+5. 数据健康（`#healthSec`，v1.8）：可折叠表格，逐源行数/耗时/成败/错误、归档合并天数、远程额度与计费源、云同步新鲜度；有错自动展开
+6. 设置抽屉：编辑各工具套餐额度、汇率、单价覆盖
+
+窄屏（≤640px）：工具卡单列、KPI 两列（hero 跨列）、顶栏隐藏数据源长串、速览与健康紧凑化；报告 Markdown 容器 `overflow-x:auto` 自滚动（否则宽表把整页撑出横向滚动条）
 
 ## 9. 风险与对策
 
@@ -215,3 +219,11 @@ ai-quota-dashboard/
 - **归一**：一条 `assistant/message` = 一次请求；`inputTokens` 已是净额、缓存读单列（与 codex-sessions 同口径）；`costUsd` 为 null，按单价表（deepseek-v4 系）等价核算；`providerId=source.provider` 进服务商/按量归因；`cwd` 进项目统计；子代理（`delegationDepth>0`）会话同样计入真实消耗。
 - **容错**：文件未变（mtime+size 同）复用解析缓存；坏行计数但保留其余行；单会话解压上限 256MB；未装 dsh（目录不存在）静默零数据。
 - **依赖**：macOS 需 `brew install zstd`（README / USER_GUIDE 已注明）；Node ≥23.8 内建 zlib 仅作单帧回退。
+
+### 10.7 预估口径统一与数据健康（v1.8）
+
+- **一个概念只有一处实现**：`server/lib/forecast.js` 导出 `monthForecast({dailyKeys, spendCny, now, minElapsedDays})`、`dayForecast(...)`、`bjParts(now)`、`coverageStartDay(dailyKeys, now)`，web 端 `forecast(toolKey)` 只读快照 `snap.forecast`，不再自己做除法。
+- **分母为什么不能是「有数据的天数」**：那样没花钱的周末不进分母，租金式日均被抬高（例：¥200 花在 19.5 个有数据日 → 日均 ¥10.26 → 月底 ¥318，正确 ¥307.69）；新装首日半天数据除以一整天则相反，预估只有真值一半。现口径：`elapsedDays = (今天 - 覆盖起点) + 当日已过比例`，`覆盖起点 = max(当月 1 日, 当月首条数据日)`；配置端（store.monthlyForecast）与展示端同源。
+- **`minElapsedDays = MIN_ELAPSED_DAYS = 0.25`（6 小时）**：已过不足 6 小时返回 `ok:false`，前端显示「数据不足 6 小时」，避免拿半小时数据外推全天。
+- **快照字段契约**：`collectorStatus[{rows,ms,ok,rawRows?}]`（六采集器，键与 `rowStats` 一致）、`historyStatus{ok,ms,days,covered}`、`forecast{today:{ok,projectedCny,elapsedFrac,spendCny}, month:{total, tools}}`；`tools` 缺数据时返回 `ok:false` 而非省略键，且**不得回退 `__total`**（旧 `monthlyForecast` 曾把其他工具金额算进单工具）。
+- **数据健康面板**（`web/js/health.js`）：纯展示，不触发采集；远程源仅在「成功或报错」时列出（未配置不占行）；`<details>` 重渲染保留用户展开状态，有错时才默认展开。

@@ -170,14 +170,47 @@ t('applyCost 累计 cacheCreationTokens（tool/__total/models 桶）', () => {
   assert.equal(a2.models.zcode['GLM-5.3-Flash'].cacheCreationTokens, 7);
 });
 
-console.log('== forecast ==');
-t('月内线性外推 = 日均 × 当月天数', () => {
-  // 手工构造：daily 里只有 09-15 一天 zcode ¥20.8，9 月 30 天
-  const daily = { '2026-09-15': { zcode: { requests: 1, inputTokens: 1, outputTokens: 1, reasoningTokens: 0, cacheReadTokens: 0, costUsd: 0, costCny: 0, equivalentCny: 20.8 } } };
+console.log('== forecast（v1.8 口径：日历天分母 + 当日进度 + 覆盖起点）==');
+const { monthForecast, dayForecast, bjParts } = require('../server/lib/forecast');
+t('月中新装：首日 12:00 花 ¥20.8 → 半天折全天再 ×30（旧口径按 1 天算只有 ¥624）', () => {
+  const dailyKeys = ['2026-09-15'];
   const now = Date.UTC(2026, 8, 15, 4, 0); // 北京 09-15 12:00
-  const f = monthlyForecast(daily, 'zcode', now);
+  const f = monthForecast({ dailyKeys, spendCny: 20.8, now });
   assert.equal(f.daysInMonth, 30);
-  assert.ok(Math.abs(f.forecastCny - 20.8 * 30) < 1e-6, `got ${f.forecastCny}`);
+  assert.equal(f.startDay, 15, '覆盖起点=当月首条数据日，不拿月初的空白天稀释日均');
+  assert.ok(Math.abs(f.elapsedDays - 0.5) < 1e-9, `elapsed ${f.elapsedDays}`);
+  assert.ok(Math.abs(f.projectedCny - 20.8 * 2 * 30) < 1e-6, `got ${f.projectedCny}`);
+});
+t('跳过不用的周末：分母是日历天，不是有数据的天数（避免月底虚高）', () => {
+  const dailyKeys = [];
+  for (let d = 1; d <= 10; d++) dailyKeys.push(`2026-09-${String(d).padStart(2, '0')}`);
+  const now = Date.UTC(2026, 8, 20, 4, 0); // 北京 09-20 12:00，已过 19.5 天
+  const f = monthForecast({ dailyKeys, spendCny: 200, now });
+  assert.equal(f.startDay, 1);
+  assert.ok(Math.abs(f.elapsedDays - 19.5) < 1e-9);
+  assert.ok(Math.abs(f.projectedCny - 200 / 19.5 * 30) < 0.01, `got ${f.projectedCny}`); // 分位取整
+});
+t('不足 6 小时不外推（凌晨 1 单不能外推出天文数字）', () => {
+  const f = monthForecast({ dailyKeys: ['2026-09-15'], spendCny: 30, now: Date.UTC(2026, 8, 14, 19, 0) }); // 北京 09-15 03:00
+  assert.equal(f.ok, false);
+  assert.equal(f.projectedCny, null);
+});
+t('工具当天无数据时不回退 __total（不会把别的工具的钱算进本工具预估）', () => {
+  const daily = { '2026-09-01': { __total: { costCny: 100, equivalentCny: 0 }, zcode: { costCny: 10, equivalentCny: 0 } } };
+  const f = monthlyForecast(daily, 'dsh', Date.UTC(2026, 8, 10, 4, 0));
+  assert.equal(f.spendCny, 0);
+  assert.equal(f.forecastCny, 0);
+});
+t('当日外推：12:00 花 ¥50 → 全天 ¥100；不足 6 小时返回 ok:false', () => {
+  const d1 = dayForecast({ spendCny: 50, now: Date.UTC(2026, 8, 15, 4, 0) });
+  assert.ok(Math.abs(d1.projectedCny - 100) < 1e-6, `got ${d1.projectedCny}`);
+  const d2 = dayForecast({ spendCny: 50, now: Date.UTC(2026, 8, 14, 19, 0) });
+  assert.equal(d2.ok, false);
+});
+t('bjParts：北京时间日界与当日比例（00:00 = 0，12:00 = 0.5）', () => {
+  assert.equal(bjParts(Date.UTC(2026, 8, 15, 16, 0)).frac, 0); // UTC 16:00 = 北京 09-16 00:00
+  assert.equal(bjParts(Date.UTC(2026, 8, 15, 16, 0)).day, 16);
+  assert.ok(Math.abs(bjParts(Date.UTC(2026, 8, 16, 4, 0)).frac - 0.5) < 1e-9);
 });
 
 console.log('== 昨日对比 ==');
@@ -2138,7 +2171,7 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     alerts: { enabled: false, webhookType: 'generic', webhookUrl: IHOOK, thresholds: { fiveHour: 85, weekly: 85, dailyGoalPct: 100 }, cooldownMinutes: 60 },
   });
 
-  await ta('buildSnapshot：形状齐全（builtAt / agg.daily / agg.models / collectorErrors / rowStats 五采集器）', async () => {
+  await ta('buildSnapshot：形状齐全（builtAt / agg.daily / agg.models / collectorErrors / rowStats 六采集器）', async () => {
     const s = await buildSnapshot();
     assert.ok(Number.isFinite(s.builtAt));
     assert.ok(s.agg && typeof s.agg.daily === 'object' && typeof s.agg.models === 'object');
@@ -2175,6 +2208,56 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
         assert.ok(x.label && x.keyMasked && typeof x.checked === 'boolean' && typeof x.ok === 'boolean'
           && ('linkedProvider' in x) && Number.isFinite(x.checkedAt), 'zhipuExtraKeys 元素字段形状');
       }
+    }
+  });
+
+  await ta('buildSnapshot：collectorStatus / historyStatus / forecast 形状（v1.8 数据健康与统一预估口径）', async () => {
+    const s = await buildSnapshot();
+    // 采集器状态：六个源各带 rows/ms/ok，与 rowStats 同键，前端「数据健康」直接按此渲染
+    const expects = ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness'];
+    assert.deepEqual(Object.keys(s.collectorStatus).sort(), expects.slice().sort());
+    for (const k of expects) {
+      const st = s.collectorStatus[k];
+      assert.ok(Number.isInteger(st.rows) && st.rows >= 0, `collectorStatus.${k}.rows 应为非负整数`);
+      assert.ok(Number.isFinite(st.ms) && st.ms >= 0, `collectorStatus.${k}.ms 应为非负数`);
+      assert.equal(typeof st.ok, 'boolean', `collectorStatus.${k}.ok 应为布尔`);
+      if (k === 'codexSessions') assert.ok(Number.isInteger(st.rawRows) && st.rawRows >= st.rows, 'codex 双源需带 rawRows 且不小于切换后行数');
+    }
+    // 归档状态
+    assert.equal(typeof s.historyStatus.ok, 'boolean');
+    assert.ok(Number.isInteger(s.historyStatus.days) && Number.isInteger(s.historyStatus.covered));
+    assert.ok(Number.isFinite(s.historyStatus.ms));
+    // 预估：今日一条 + 本月合计 + 每个工具一条（工具键与卡片一致，无数据也返回 ok:false 而不是缺字段）
+    assert.ok(s.forecast && typeof s.forecast === 'object');
+    assert.equal(typeof s.forecast.today.ok, 'boolean');
+    if (s.forecast.today.ok) assert.ok(Number.isFinite(s.forecast.today.projectedCny) && s.forecast.today.projectedCny >= 0);
+    assert.ok(s.forecast.month && s.forecast.month.total && typeof s.forecast.month.tools === 'object');
+    for (const k of ['zcode', 'codex', 'claudeDesktop', 'claudeCode', 'workbuddy', 'dsh']) {
+      const f = s.forecast.month.tools[k];
+      assert.ok(f, `forecast.month.tools.${k} 应存在（无数据时 ok:false）`);
+      assert.equal(typeof f.ok, 'boolean');
+      assert.equal(typeof f.spendCny, 'number');
+      if (f.ok) assert.ok(f.projectedCny >= f.spendCny - 0.01, `${k} 预估不应低于已花（口径：日历天外推）`);
+    }
+    // 预估不得把别的工具的钱算进来：单工具 spend ≤ 合计 spend（旧实现 tools 无数据时回退 __total）
+    const sumTools = Object.values(s.forecast.month.tools).reduce((a, f) => a + f.spendCny, 0);
+    assert.ok(sumTools <= s.forecast.month.total.spendCny + 0.01, '各工具已花之和不应超过本月合计');
+  });
+
+  await ta('buildSnapshot：readonly 展示端不报本机采集器故障（避免「数据健康」天天假告警）', async () => {
+    process.env.AI_QUOTA_HISTORY = 'readonly';
+    try {
+      const s = await buildSnapshot();
+      assert.equal(s.readonly, true, '只读展示端应带 readonly 标记');
+      assert.deepEqual(s.collectorStatus, {}, '展示端不列本机采集器状态（服务器上没有 ~/.zcode 等源）');
+      for (const k of ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness']) {
+        assert.ok(!(k in s.collectorErrors), `readonly 下不应报 ${k} 的采集错误`);
+      }
+      // 归档仍照常合并（云端唯一数据来源），预测/历史健康字段仍在
+      assert.ok(s.historyStatus && typeof s.historyStatus.ok === 'boolean');
+      assert.ok(s.forecast && s.forecast.month && typeof s.forecast.month.tools === 'object');
+    } finally {
+      delete process.env.AI_QUOTA_HISTORY;
     }
   });
 

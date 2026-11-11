@@ -57,6 +57,7 @@ document.documentElement.dataset.theme = t;
 </div>
 
 <div id="goalBanner"></div>
+<div id="todaySummary"></div><!-- 今日速览（v1.8）：昨日同期 / 全天预计 / 主要花钱工具 / 最紧额度 -->
 <div id="staleBanner" class="warn-banner" hidden></div><!-- 云端展示端专用：主端同步断供提示（renderStaleBanner 填充） -->
 
 <div id="onboard"></div>
@@ -152,6 +153,10 @@ document.documentElement.dataset.theme = t;
     </span>
   </h2>
   <div class="table-wrap tall"><table id="detail"></table></div>
+</section>
+
+<section id="healthSec">
+  <div id="healthBox"></div><!-- 数据健康（v1.8）：每个采集器的行数/耗时/错误 + 归档 + 云同步 -->
 </section>
 
 <dialog id="settingsDlg">

@@ -30,9 +30,13 @@ This dashboard turns those questions into one screen of numbers. It quietly read
 ![Settings panel](docs/screenshots/settings.png)
 
 - 💸 **Today's spend**: one card per tool with today / week / month costs; subscription tools get an "equivalent pay-as-you-go" estimate so they're comparable with metered ones
+- 🧭 **A conclusion, not just numbers**: a "Today at a glance" strip pins the verdict on top — change vs. the same time yesterday, projected full day (flagged when it will blow the target), the tool burning the most today and its share, the tightest quota window, and an alert when a tool spikes past 1.8× its 7-day average
+- 🩺 **Data health**: an expandable panel at the bottom lists, per collector, how many rows this round read, how long it took and why it failed — plus archive merge days, remote quota/billing/network sources and cloud-sync freshness, so a wrong number is diagnosable without digging through logs
+- 📱 **Reads well on phones**: single-column cards, tighter top bar and self-scrolling tables on narrow screens; wide Markdown tables in reports no longer blow out the page
 - 💾 **History that survives**: daily aggregates persist into a local SQLite archive (`config/history.sqlite`) — even after source logs rotate away, the "All (archived)" view keeps up to 10 years
 - 📣 **Quota alerts to your phone**: push via WeCom (WeChat Work) / ntfy / Bark / ServerChan / generic webhook when 5h / weekly windows or the daily target approach their thresholds, with a cooldown against spam; payloads carry percentages, amounts and countdowns only — never keys or token details
 - 📊 **Weekly & monthly reports**: a seven-section Markdown report (costs vs last period / tool ranking / top-5 models / budget attainment) in one click — copy it into your weekly meeting or download as .md
+- 📈 **Forecast you can trust**: month-end projection uses calendar days + today's elapsed fraction (skipped weekends and a fresh install no longer skew the average)
 - 🎯 **Daily cost target**: set a ¥200/day budget and track remaining budget plus projected exhaustion time in the banner, the percentage in the menu bar, and a system notification when it's used up (💸)
 - 🆚 **vs yesterday**: same-time and full-day comparison, so you can tell at a glance whether today is burning faster
 - 🌐 **Local network traffic**: 60s interface-counter deltas grouped by the network you're on (WiFi SSID / Ethernet / USB), daily & monthly totals, live rate, stacked 30-day chart and an optional per-day traffic goal bar (macOS, no extra permissions)

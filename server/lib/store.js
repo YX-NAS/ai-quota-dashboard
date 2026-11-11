@@ -1,5 +1,6 @@
 'use strict';
 // 聚合存储：采集 → 归一 → 日/月汇总 → 缓存
+const { monthForecast } = require('./forecast');
 const { vendorForRow, vendorOf } = require('./pricing');
 // 北京时间工具为单一事实源（server/lib/bjtime.js）；这里 re-export 保持
 // `require('../server/lib/store')` 上的 bjDate/bjMonth 兼容（既有消费方/测试从 store 引）
@@ -250,21 +251,26 @@ function projectAggregate(rows, pricer, now = Date.now()) {
   return out;
 }
 
-// 月底线性预估：本月已用等价成本 / 已过天数 * 当月天数
-// （仅测试/预留：当前服务端与前端均无消费方，保留供后续「月度预估」卡片使用，勿删）
+// 月底线性预估：委托 lib/forecast.js（v1.8 起口径唯一实现，分母为日历天而非有数据的天数）。
+// 保留此导出仅供单测与后续「月度预估」卡片使用；前端走快照里的 snap.forecast。
+// 修正点：工具当天无数据时不再回退到 __total（那会把别的工具的钱算进本工具预估）。
 function monthlyForecast(daily, tool, now = Date.now()) {
   const mon = bjMonth(now);
-  const daysInMonth = new Date(Date.UTC(
-    Number(mon.slice(0, 4)), Number(mon.slice(5, 7)), 0)).getUTCDate();
-  let spent = 0, elapsed = 0;
-  for (const [date, tools] of Object.entries(daily)) {
-    if (!date.startsWith(mon)) continue;
-    elapsed++;
-    const a = tools[tool] || tools.__total;
-    if (a) spent += a.costCny + a.equivalentCny;
+  const dailyKeys = Object.keys(daily).sort();
+  let spent = 0;
+  for (const d of dailyKeys) {
+    if (!d.startsWith(mon)) continue;
+    const a = (daily[d] || {})[tool];
+    if (a) spent += (a.costCny || 0) + (a.equivalentCny || 0);
   }
-  if (!elapsed) return { forecastCny: 0, daysInMonth, elapsed };
-  return { forecastCny: spent / elapsed * daysInMonth, daysInMonth, elapsed, spentCny: spent };
+  const f = monthForecast({ dailyKeys, spendCny: spent, now });
+  return {
+    forecastCny: f.ok ? f.projectedCny : 0,
+    daysInMonth: f.daysInMonth,
+    elapsed: f.elapsedDays,
+    ok: f.ok,
+    spendCny: spent,
+  };
 }
 
 // 昨日对比：昨日同期（昨天北京时间 0 点 ~ 昨天此刻）与昨日全天，按工具分桶

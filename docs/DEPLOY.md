@@ -1,4 +1,4 @@
-# ☁️ 云端部署指南（v1.7）
+# ☁️ 云端部署指南（v1.8）
 
 把本机运行的 AI 额度看板以**登录保护**的方式发布到云服务器/家庭服务器域名下。
 核心原则一句话：**采集永远发生在数据所在的电脑上；云服务器只是加了门禁的显示器，拿不到任何密钥。**
@@ -19,7 +19,7 @@
                                                          https://quota.5176nas.site
 ```
 
-- **版本要求**：两端 Node ≥ 22.13；服务器 git clone 本仓库 release tag（当前最新 v1.7.4）。
+- **版本要求**：两端 Node ≥ 22.13；服务器跑本仓库 release tag（当前最新 v1.8.0）。服务器上可以不建 git 仓库——直接 `rsync -a --exclude config --exclude dist --exclude .git ./ user@host:/srv/ai-quota/` 复制代码即可，配置目录 `AI_QUOTA_CONFIG_DIR` 独立于代码目录。
 - **零密钥出境（机械保证，非口头承诺）**：`scripts/deploy-pack.js` 打包时整块删除 `quotaKeys`、清空
   `alerts.webhookUrl`，永不含 auth.json；即使配置失误也推不出密钥。服务器侧凭据用
   `hash-password.js` 在**服务器上**生成（scrypt 哈希，明文不落任何文件/仓库）。
@@ -29,7 +29,7 @@
 ```bash
 # 1.1 拉代码（用 release tag，不用 main）
 git clone https://github.com/YX-NAS/ai-quota-dashboard.git /srv/ai-quota
-cd /srv/ai-quota && git checkout v1.7.4
+cd /srv/ai-quota && git checkout v1.8.0
 
 # 1.2 生成登录凭据（交互式输入密码，不回显；写入 config/auth.json 0600）
 node scripts/hash-password.js wanye --save
@@ -129,7 +129,8 @@ macOS 用 launchd 更可靠（开机即载、睡眠唤醒后补跑）：plist �
 
 ```bash
 # 服务器升级（展示端无状态，秒级）
-cd /srv/ai-quota && git fetch --tags && git checkout v1.7.4 && sudo systemctl restart ai-quota
+cd /srv/ai-quota && git fetch --tags && git checkout v1.8.0 && sudo systemctl restart ai-quota
+# 非 git 部署：rsync 覆盖 server/ web/ package.json 后同样 `sudo systemctl restart ai-quota`
 # 会话为内存表：重启 = 全员重新登录（预期行为）
 ```
 

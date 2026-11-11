@@ -433,7 +433,7 @@ export function renderCards() {
         <div><span class="k">本月请求</span><span>${fmt(month.requests)} 次 · ${tok(month.inputTokens + month.outputTokens)} tk</span></div>
         <div><span class="k">本月费用</span><span>${costLine}</span></div>
         <div><span class="k">本周费用</span><span>${fmtCny(weekToolCny)} <span class="mut">（周一起）</span></span></div>
-        <div><span class="k">本月预估</span><span>${fmtCny(fc)} <span class="mut">（线性外推）</span></span></div>
+        <div><span class="k">本月预估</span><span>${fc.ok ? fmtCny(fc.cny) : '—'} <span class="mut">（${fc.ok ? '线性外推' : '数据不足 6 小时'}）</span></span></div>
       </div>
       ${quotaHtml}
       <div class="fresh">数据源 ${rowStatOf(t.key)} 条${cErr ? ' · <span class="err">' + esc(cErr) + '</span>' : ''}</div>

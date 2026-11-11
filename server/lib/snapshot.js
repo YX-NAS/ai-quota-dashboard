@@ -8,6 +8,7 @@ const fs = require('node:fs'); // 云端 VPN 归档回退读 vpn-state.json / �
 const path = require('node:path');
 const { makePricer } = require('./pricing');
 const { aggregate, vendorAggregate, apiAggregate, modelAggregate, projectAggregate, compareYesterday, bjDate } = require('./store');
+const { monthForecast, dayForecast } = require('./forecast');
 const history = require('./history');
 const zcode = require('../collectors/zcode');
 const ccswitch = require('../collectors/ccswitch');
@@ -22,7 +23,12 @@ const apiBilling = require('../collectors/api-billing');
 const networkTraffic = require('../collectors/network-traffic');
 const vpnQuota = require('../collectors/vpn-quota');
 
+// 云端只读展示端（见 docs/DEPLOY.md）。每次构建时读 env（而非 require 时固化），
+// 集成测试才能在同一进程里模拟「主端/展示端」两种角色。
+const isReadonly = () => process.env.AI_QUOTA_HISTORY === 'readonly';
 const QUOTA_SNAPSHOT_KEYS = ['chatgptQuota', 'minimaxQuota', 'zhipuQuota'];
+// 与 web/js/render-cards.js TOOLS 的 key 对齐（月度预估按工具给）
+const FORECAST_TOOLS = ['zcode', 'codex', 'claudeDesktop', 'claudeCode', 'workbuddy', 'dsh'];
 // 云端数据陈旧判定（纯函数，导出供测试）：唯一依据是主端「最后一轮 pack+rsync 全部成功送达」
 // 的 sync-marker 时间戳（失败轮不刷新）——主端脚本挂没挂、网络断没断都诚实反映在 age 上。
 // 阈值 12h：同步周期 10 分钟，但要容忍笔记本整夜合盖（8~10h 无同步属正常），醒来下一轮即恢复，
@@ -55,7 +61,16 @@ async function buildSnapshot() {
   const plans = plansStore.load();
   const pricer = makePricer(plans);
 
-  const [zc, cc, wb, clc, cs, dh] = [zcode.collect(), ccswitch.collect(), workbuddy.collect(), claudecode.collect(), codexSessions.collect(), deepseekHarness.collect()];
+  // 采集计时（v1.8 数据健康）：回答「哪个源慢 / 挂了 / 这次读了多少行」，
+  // 单源异常只记状态，绝不阻塞其他源。
+  const clock = fn => { const s = process.hrtime.bigint(); const v = fn(); return [v, Number(process.hrtime.bigint() - s) / 1e6]; };
+  const [zc, zcMs] = clock(() => zcode.collect());
+  const [cc, ccMs] = clock(() => ccswitch.collect());
+  const [wb, wbMs] = clock(() => workbuddy.collect());
+  const [clc, clcMs] = clock(() => claudecode.collect());
+  const [cs, csMs] = clock(() => codexSessions.collect());
+  const [dh, dhMs] = clock(() => deepseekHarness.collect());
+  const round1 = n => Math.round(n * 10) / 10;
   // Codex 双源切换点：cc-switch（2026-10-15 起停更）与 ~/.codex/sessions 的重叠期只认前者，
   // 会话行仅取 cc-switch 末条之后 —— 防止两源对同一请求双计；cc-switch 恢复记录时自动跟随。
   let csRows = cs.rows;
@@ -74,11 +89,32 @@ async function buildSnapshot() {
   for (const [k, v] of Object.entries({ zcode: zc, ccswitch: cc, codexSessions: cs, workbuddy: wb, claudeCode: clc, deepseekHarness: dh })) {
     if (v.error) errors[k] = v.error;
   }
+  // 数据健康（v1.8）：每个本机源的耗时/行数/成败。codexSessions 单列 rawRows（切换点过滤前），
+  // 两者不一致是正常的——它说明双源切换点在生效，不是丢数据。
+  let collectorStatus = {
+    zcode: { rows: zc.rows.length, ms: round1(zcMs), ok: !zc.error },
+    ccswitch: { rows: cc.rows.length, ms: round1(ccMs), ok: !cc.error },
+    codexSessions: { rows: csRows.length, rawRows: cs.rows.length, ms: round1(csMs), ok: !cs.error },
+    workbuddy: { rows: wb.rows.length, ms: round1(wbMs), ok: !wb.error },
+    claudeCode: { rows: clc.rows.length, ms: round1(clcMs), ok: !clc.error },
+    deepseekHarness: { rows: dh.rows.length, ms: round1(dhMs), ok: !dh.error },
+  };
+
+  // 只读展示端（云端，AI_QUOTA_HISTORY=readonly）：本机采集器在这里必然打不开源库
+  // （~/.zcode、~/.cc-switch 等不在服务器上），报错是环境事实而非故障。
+  // 若照实上报，前端「数据健康」会天天显示「2 个数据源异常」并自动展开——真出问题时就没人看了。
+  // 因此展示端一律不报本机采集器状态：数据来自主端同步的归档库与脱敏快照，健康面板只留归档与远程源。
+  if (isReadonly()) {
+    collectorStatus = {};
+    for (const k of ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness']) delete errors[k];
+  }
 
   // 历史归档：聚合结果落库 + 归档补缺合并（raw 优先、archive 只补缺）。
   // 两者解耦：syncFromAgg 返回 false 有两种语义——库不可用（merge 也会自行降级 null）
   // 与 readonly 云端模式跳过写入（merge 必须照常，否则云端归档数据整体不可见）。
   // 容错：归档库打开/读写任何失败只记 collectorErrors.history，绝不阻塞快照主流程
+  const hStart = process.hrtime.bigint();
+  let historyMerged = 0;
   try {
     history.syncFromAgg(agg);
     const merged = history.mergeArchived(agg.daily, agg.models, pricer);
@@ -86,10 +122,17 @@ async function buildSnapshot() {
       agg.daily = merged.daily;
       agg.dailyKeys = merged.dailyKeys;
       agg.models = merged.models;
+      historyMerged = merged.dailyKeys.length;
     }
   } catch (e) {
     errors.history = e.message;
   }
+  const historyStatus = {
+    ok: !errors.history,
+    ms: round1(Number(process.hrtime.bigint() - hStart) / 1e6),
+    days: historyMerged,
+    covered: agg.dailyKeys.length,
+  };
 
   // ChatGPT / MiniMax / 智谱 实时额度 + 各服务商 API 余额：四路并行采集（互不阻塞，
   // 总耗时 ≈ 最慢一路，而非四路之和）。每路带 10s race 超时；失败/超时降级 null，
@@ -128,7 +171,7 @@ async function buildSnapshot() {
   // 云端额度回退：只读展示模式才启用（本机的 live 采集永远优先，绝不拿旧快照盖新数据）。
   // 同一份 quota-snapshot.json 还携带主端 network 展示字段（下方网络卡回退复用）。
   let qsJson = null;
-  if (process.env.AI_QUOTA_HISTORY === 'readonly') {
+  if (isReadonly()) {
     try {
       qsJson = JSON.parse(fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'quota-snapshot.json'), 'utf8'));
       applyQuotaSnapshotFallback(quotaData, qsJson);
@@ -220,7 +263,7 @@ async function buildSnapshot() {
   // 云端陈旧感知（仅 readonly 展示端）：sync-marker 距上次成功同步的时长 → 前端陈旧横幅。
   // 主端本机模式永不显示（数据就在本机产生，无「同步断供」概念）。
   let syncStale = null;
-  if (process.env.AI_QUOTA_HISTORY === 'readonly') {
+  if (isReadonly()) {
     try {
       syncStale = calcSyncStale(JSON.parse(fs.readFileSync(path.join(plansStore.CONFIG_DIR, 'sync-marker.json'), 'utf8')));
     } catch { /* 旧版 pack 无 marker：不猜不吵 */ }
@@ -229,7 +272,7 @@ async function buildSnapshot() {
   // 云端网络卡回退：live netstat 采集是 macOS 专属（云端 Linux 必失败 → current 空、实时卡隐藏、
   // 目标进度条空转）。用主端快照里的 network 展示字段顶位（同 30 分钟新鲜窗 + archived 标记，
   // live 永远优先）；today/month 本身来自同步归档无需回退，仅 current（网络名+速率）走快照。
-  if (process.env.AI_QUOTA_HISTORY === 'readonly' && network && !network.current
+  if (isReadonly() && network && !network.current
     && qsJson && Number.isFinite(qsJson.generatedAt) && Date.now() - qsJson.generatedAt < QUOTA_SNAPSHOT_FRESH_MS
     && qsJson.network && qsJson.network.current) {
     network = Object.assign({}, network, {
@@ -238,8 +281,31 @@ async function buildSnapshot() {
     });
   }
 
+  // 线性外推（v1.8，口径唯一实现见 lib/forecast.js）：分母是日历天而非有数据的天数
+  const todayK = bjDate(Date.now());
+  const monK = todayK.slice(0, 7);
+  const cnyOf = a => (a ? (a.costCny || 0) + (a.equivalentCny || 0) : 0);
+  const monthSpend = tool => {
+    let sum = 0;
+    for (const d of agg.dailyKeys) {
+      if (!d.startsWith(monK)) continue;
+      const day = agg.daily[d] || {};
+      sum += cnyOf(tool ? day[tool] : day.__total);
+    }
+    return sum;
+  };
+  const forecast = {
+    today: dayForecast({ spendCny: cnyOf((agg.daily[todayK] || {}).__total) }),
+    month: {
+      total: monthForecast({ dailyKeys: agg.dailyKeys, spendCny: monthSpend(null) }),
+      tools: Object.fromEntries(FORECAST_TOOLS.map(k => [k, monthForecast({ dailyKeys: agg.dailyKeys, spendCny: monthSpend(k) })])),
+    },
+  };
+
+  const readonly = isReadonly();
   return {
     builtAt: Date.now(),
+    readonly, // 前端据此说明「只读展示端，本机采集器不在此运行」
     // 快照对外脱敏：quotaKeys 机密字段（accessToken 等）只出掩码形态，其余配置原样
     plans: plansStore.maskQuotaKeys(plans),
     agg,
@@ -256,6 +322,9 @@ async function buildSnapshot() {
     network,
     syncStale,
     collectorErrors: errors,
+    collectorStatus,
+    historyStatus,
+    forecast,
     rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, codexSessions: csRows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length, dsh: dh.rows.length },
   };
 }

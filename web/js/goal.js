@@ -1,5 +1,5 @@
 // 当日目标成本（预算横幅）与本月预估
-import { fmtCny, todayKey, monthKey, cny } from './utils.js';
+import { fmtCny, todayKey, cny } from './utils.js';
 import { snap, toolDay } from './state.js';
 
 // 昨日同期对比：涨=绿（投入更多视为正向，与目标成本的预警只在横幅/菜单栏体现）
@@ -65,16 +65,11 @@ export function renderGoalBanner() {
 }
 
 export function forecast(toolKey) {
-  // 线性外推本月
-  const mon = monthKey();
-  const now = new Date(Date.now() + 8 * 3600e3);
-  const dim = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
-  let spent = 0, el = 0;
-  for (const d of snap.agg.dailyKeys) {
-    if (!d.startsWith(mon)) continue;
-    el++;
-    const a = toolDay(d, toolKey);
-    if (a) spent += cny(a);
-  }
-  return el ? spent / el * dim : 0;
+  // 月度预估（v1.8）：口径统一在服务端 server/lib/forecast.js，前端不再自己算。
+  // 旧实现的分母是「有数据的天数」——跳过的周末不在分母里，日均被抬高，月底预估虚高；
+  // 且新装首日半天被当整天，预估被压低一半。改为日历天 + 当日进度（服务端唯一实现）。
+  const f = snap.forecast && snap.forecast.month && snap.forecast.month.tools
+    ? snap.forecast.month.tools[toolKey] : null;
+  if (!f) return { ok: false, cny: null };
+  return { ok: !!f.ok, cny: f.ok ? f.projectedCny : null };
 }

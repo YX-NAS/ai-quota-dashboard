@@ -3,6 +3,8 @@ import { toast } from './utils.js';
 import { snap, setSnap } from './state.js';
 import { safeGet, safeSet, ONBOARD_KEY } from './storage.js';
 import { renderGoalBanner } from './goal.js';
+import { renderTodaySummary } from './summary.js';
+import { renderHealth } from './health.js';
 import { renderCards, renderQuotaCards, renderBillingCards } from './render-cards.js';
 import {
   renderKpis, renderModelRank, renderProjectStats, renderApiCosts,
@@ -71,6 +73,7 @@ function render() {
   renderOnboard();
   renderStaleBanner();
   renderGoalBanner();
+  renderTodaySummary();
   renderKpis();
   renderCards();
   renderPlanValue();
@@ -83,6 +86,7 @@ function render() {
   renderChart();
   renderNetwork();
   renderDetail();
+  renderHealth();
 }
 
 // ---------- 新用户引导横幅：所有采集器都没有数据时显示一次 ----------
