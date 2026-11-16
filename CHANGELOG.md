@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.8.2] - 2026-11-16
+
+### 🚀 开机自启一键安装（macOS LaunchAgent）
+
+- **新增 `scripts/install-autostart.sh`**：一条命令安装 `site.quota.autostart` LaunchAgent——`RunAtLoad` 登录即拉起全端（服务+菜单栏+桌面卡片，复用 start-all.sh 幂等逻辑），`StartInterval 300` 兼职**崩溃自愈**（服务意外挂掉 ≤5 分钟自动拉起）；`--uninstall` 卸载、`--status` 查装载与退出码。
+- 纠正 README 旧说法：**macOS 13+「登录项」添加 shell 脚本不会执行**（只有注册过的 App 才运行）；此前该指引实际无效。
+- plist 显式写入 PATH（含 /opt/homebrew/bin）——吸取 cloud-sync 静默失败 3 天的事故教训，launchd 最小环境里 node/python 必须可解析。
+- 已实测演练：全端停止 → kickstart 触发 → 服务/菜单栏/桌面卡片全部自动恢复。
+
 ## [1.8.1] - 2026-11-16
 
 ### 🔧 网络流量/VPN 差分修正：重启/续订归零段不再吞掉

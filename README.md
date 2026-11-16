@@ -75,7 +75,7 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 .\stop-all.cmd     # 一键全停
 ```
 
-开机自启（macOS）：系统设置 → 通用 → 登录项 → 添加 `start-all.sh`；
+开机自启（macOS）：`./scripts/install-autostart.sh` 一条命令装好 LaunchAgent——登录即自启 + 每 5 分钟自愈；卸载 `--uninstall`。（别用系统设置登录项加脚本：macOS 13+ 不会执行它）
 开机自启（Windows）：`Win+R` 输入 `shell:startup`，把 `start-all.cmd` 的快捷方式放进去。
 
 > 📖 第一次用？从装 Node.js 到预警推手机，看**图文上手手册**：[docs/USER_GUIDE.md](docs/USER_GUIDE.md)。
