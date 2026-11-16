@@ -67,15 +67,16 @@ function parseAirportNetwork(text) {
   return v || null;
 }
 
-// 差分 + 计数器回绕保护：new < prev（重启/唤醒后计数器清零）按 0 计。
-// 首次观测的接口无基准，本轮不计增量（下轮起正常差分）。纯函数，导出供单测。
+// 差分 + 计数器回绕保护：new < prev（重启/网卡重置后计数器清零）→ 新值按 0 重新起计，
+// 增量 = new 本身（开机~首轮之间的流量不丢——旧实现按 0 吞掉，会漏计每次开机后的首段）。
+// 首次观测的接口无基准（无法区分开机前后），本轮不计增量（下轮起正常差分）。纯函数，导出供单测。
 function computeDeltas(rows, prev) {
   const deltas = {}, counters = {};
   for (const r of rows) {
     counters[r.name] = { ib: r.ibytes, ob: r.obytes };
     const p = prev && prev[r.name];
     deltas[r.name] = p
-      ? { rx: r.ibytes >= p.ib ? r.ibytes - p.ib : 0, tx: r.obytes >= p.ob ? r.obytes - p.ob : 0 }
+      ? { rx: r.ibytes >= p.ib ? r.ibytes - p.ib : r.ibytes, tx: r.obytes >= p.ob ? r.obytes - p.ob : r.obytes }
       : { rx: 0, tx: 0 };
   }
   return { deltas, counters };

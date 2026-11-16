@@ -29,9 +29,11 @@ function parseSubscriptionUserinfo(headerValue) {
   return { upload, download, total, expire: expire > 0 ? expire * 1000 : null };
 }
 
-// 累计已用 → 本轮增量：无基线（首采）或负差（续订/套餐重置计数器归零）都记 0，由调用方重建基线。纯函数
+// 累计已用 → 本轮增量：无基线（首采，整个包的历史无从拆分）记 0；
+// 负差 = 续订/套餐重置计数器归零 → 新值按 0 重新起计，增量 = curUsed 本身（续订后的消耗不再丢失）。纯函数
 function nextDelta(prevUsed, curUsed) {
-  if (prevUsed == null || !Number.isFinite(prevUsed) || !(curUsed >= prevUsed)) return 0;
+  if (prevUsed == null || !Number.isFinite(prevUsed)) return 0;
+  if (!(curUsed >= prevUsed)) return Math.max(curUsed, 0);
   return curUsed - prevUsed;
 }
 

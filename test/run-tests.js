@@ -1277,7 +1277,7 @@ t('parseAirportNetwork：Current Wi-Fi Network 行解析与未关联降级', () 
   assert.equal(netTraffic.parseAirportNetwork(null), null);
 });
 
-t('computeDeltas：差分正确；计数器回绕按 0 计；首次观测无基准不计', () => {
+t('computeDeltas：差分正确；计数器回绕按 0 重起计（开机首段不丢）；首次观测无基准不计', () => {
   const { deltas, counters } = netTraffic.computeDeltas(
     [{ name: 'en0', ibytes: 1000, obytes: 2000 }, { name: 'en5', ibytes: 500, obytes: 300 }],
     { en0: { ib: 400, ob: 1500 } },
@@ -1286,7 +1286,7 @@ t('computeDeltas：差分正确；计数器回绕按 0 计；首次观测无基�
   assert.deepEqual(deltas.en5, { rx: 0, tx: 0 }, '首次观测无基准，本轮不计增量');
   assert.equal(counters.en0.ib, 1000);
   const wrapped = netTraffic.computeDeltas([{ name: 'en0', ibytes: 10, obytes: 5 }], { en0: { ib: 1000, ob: 2000 } });
-  assert.deepEqual(wrapped.deltas.en0, { rx: 0, tx: 0 }, '重启/唤醒计数器清零：按 0 计');
+  assert.deepEqual(wrapped.deltas.en0, { rx: 10, tx: 5 }, '重启后计数器从 0 重起：新值即开机~本轮间流量，不再吞掉');
 });
 
 t('buildEntries：无流量不产条目；identities 缺失回退 iface:名；按北京时间切日', () => {
@@ -1349,10 +1349,10 @@ t('parseSubscriptionUserinfo：全字段解析、expire 秒→毫秒、缺计量
   assert.equal(vpnQuota.parseSubscriptionUserinfo('{"ret":0,"msg":"订阅令牌无效或已过期"}'), null, '令牌失效 JSON 体不得误认作计量头');
 });
 
-t('nextDelta：正常差分、首采无基线记 0、续订计数器重置记 0 不出现负数', () => {
+t('nextDelta：正常差分、首采无基线记 0、续订计数器重置按 0 重起计新值', () => {
   assert.equal(vpnQuota.nextDelta(1000, 1500), 500);
   assert.equal(vpnQuota.nextDelta(null, 1500), 0, '首采只建基线');
-  assert.equal(vpnQuota.nextDelta(1500, 100), 0, '负差（续订归零）记 0');
+  assert.equal(vpnQuota.nextDelta(1500, 100), 100, '负差（续订归零）：新值即续订后用量');
   assert.equal(vpnQuota.nextDelta(1500, 1500), 0);
 });
 
