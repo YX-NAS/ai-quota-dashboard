@@ -17,18 +17,45 @@ if [ -f "$HOME/.codex/auth.json" ]; then
 fi
 
 # 2) 看板服务（HTTP 探活判断，比 pgrep 可靠：进程僵死/退出中也算未运行）
-# 探活统一走 /api/health：该端点不触发快照全量构建，冷启动也能秒回——
-# 旧版打 /api/summary 会在冷启动期 2s 超时 → 误判未运行 → 拉起双实例互写 .port
+# 探活统一走 /api/health 且校验响应指纹 {"ok":true,…}：该端点不触发快照全量构建，冷启动也能秒回。
+# v1.8.3 双实例根因修复——旧版只信 config/.port 单端口：.port 一旦漂移（旧实例仍占默认端口、
+# 新实例顺延端口写文件），探活就看不见那个活着的旧实例 → 再拉一个 → 双实例互写状态。
+# 现在 .port 探不到时扫描默认端口段（7788~7807，服务自身的候选区间），发现带指纹的活实例
+# 就复用并把 .port 纠正过去，绝不重复拉起。
+probe_alive() { curl -s --max-time 2 "http://127.0.0.1:${1}/api/health" 2>/dev/null | grep -q '"ok":true'; }
 PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo 7788)"
-if curl -s --max-time 2 -o /dev/null "http://127.0.0.1:${PORT_NOW}/api/health"; then
-  echo "看板服务已在运行"
+if probe_alive "$PORT_NOW"; then
+  echo "看板服务已在运行（:${PORT_NOW}）"
 else
-  echo "启动看板服务..."
-  nohup "$NODE" "$DIR/server/index.js" > /tmp/ai-quota-server.log 2>&1 &
-  sleep 2
-  # 启动后重读 .port：7788 被占时服务会自动后移，探活与提示都必须跟实际端口走
-  PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo "$PORT_NOW")"
-  curl -s --max-time 3 -o /dev/null -w "服务状态: HTTP %{http_code}（冷启动约需 30s）\n" "http://127.0.0.1:${PORT_NOW}/api/health"
+  FOUND=""
+  for p in $(seq 7788 7807); do
+    [ "$p" = "$PORT_NOW" ] && continue
+    if probe_alive "$p"; then FOUND=$p; break; fi
+  done
+  if [ -n "$FOUND" ]; then
+    echo "$FOUND" > "$DIR/config/.port"
+    echo "检测到运行中的服务实例 :${FOUND}（.port 原指向 ${PORT_NOW} 已纠正）"
+    PORT_NOW="$FOUND"
+  else
+    echo "启动看板服务..."
+    # v1.8.3：服务进程必须脱离启动它的进程组——从 launchd autostart job 里跑本脚本时，
+    # nohup 子进程仍在 job 进程组内，launchctl kickstart -k / bootout 会连服务一起 SIGKILL
+    # （实测演练踩中）。用 perl POSIX::setsid 让服务成为独立会话首领（macOS 无 setsid 命令），
+    # perl 不可用时退回 nohup（手动 shell 启动场景本就无此风险）。
+    if command -v perl >/dev/null 2>&1; then
+      perl -MPOSIX -e 'POSIX::setsid(); open(STDIN,"<","/dev/null") or die; open(STDOUT,">>","/tmp/ai-quota-server.log") or die; open(STDERR,">&STDOUT"); exec @ARGV or POSIX::_exit(127);' -- "$NODE" "$DIR/server/index.js" &
+    else
+      nohup "$NODE" "$DIR/server/index.js" > /tmp/ai-quota-server.log 2>&1 &
+    fi
+    sleep 2
+    # 启动后重读 .port：7788 被占时服务会自动后移，探活与提示都必须跟实际端口走
+    PORT_NOW="$(cat "$DIR/config/.port" 2>/dev/null || echo "$PORT_NOW")"
+    if probe_alive "$PORT_NOW"; then
+      echo "服务状态: 已启动（:${PORT_NOW}，冷启动构建约需 30s）"
+    else
+      echo "服务状态: 启动异常，查看 /tmp/ai-quota-server.log"
+    fi
+  fi
 fi
 
 # 3) 菜单栏应用（可选，仅 macOS 且已编译）

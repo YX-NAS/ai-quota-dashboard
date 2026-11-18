@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.8.3] - 2026-11-18
+
+### 🩹 双实例事故根治（自启链路的三处结构性漏洞）
+
+- **事故**：npm start 起的实例占 7788 而 `.port` 漂移 → autostart 探活只信 `.port` 看不见老实例 → 再拉一个到 7789 → 双实例并存互写状态。
+- **start-all.sh 探活重写**：`/api/health` 响应指纹识别（防任意进程占端口假阳性）+ `.port` 探不到时**扫默认端口段 7788~7807**，发现活实例即复用并纠正 `.port`——从契约上杜绝重复拉起。
+- **stop-all.sh 端口兜底**：`pkill -f 绝对路径` 匹配不到 npm start 的相对命令行（事故中 4005 就是这么漏网的），现补扫端口段：带本服务指纹 + 进程 cwd 属本仓库 → kill。
+- **服务进程脱离 launchd 进程组**：launchd job 被 `kickstart -k`/bootout 时会 SIGKILL 整个进程组，nohup 子进程同归于尽（演练实测）。改经 `perl POSIX::setsid` 让服务独立成会话首领（macOS 无 setsid 命令，perl 系统自带；缺失退回 nohup）。
+- 端到端演练验收：单实例 7788 → kickstart -kp 杀组攻击 → 原服务存活、重跑作业走「已在运行」幂等分支、无第二实例。
+
 ## [1.8.2] - 2026-11-16
 
 ### 🚀 开机自启一键安装（macOS LaunchAgent）
