@@ -22,6 +22,31 @@ function t(name, fn) {
 const plans = { usdCnyRate: 7.2, priceOverrides: {} };
 const pricer = makePricer(plans);
 
+console.log('== Antigravity 本地会话 ==');
+t('只统计 SQLite 会话和生成记录，区分缺失与部分读取失败', () => {
+  const { collect } = require('../server/collectors/antigravity');
+  const { DatabaseSync } = require('node:sqlite');
+  const root = path.join(TMP_DIR, 'antigravity');
+  assert.deepStrictEqual(collect(root), { usage: null, error: null });
+  fs.mkdirSync(root);
+  assert.deepStrictEqual(collect(root).usage, { conversations: 0, generations: 0 });
+
+  const db = new DatabaseSync(path.join(root, 'session.db'));
+  try {
+    db.exec('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY); INSERT INTO gen_metadata VALUES (0), (1)');
+  } finally {
+    db.close();
+  }
+  fs.writeFileSync(path.join(root, 'session.db.bak'), 'ignored');
+  assert.deepStrictEqual(collect(root), { usage: { conversations: 1, generations: 2 }, error: null });
+  fs.writeFileSync(path.join(root, 'broken.db'), 'invalid');
+  const partial = collect(root);
+  assert.deepStrictEqual(partial.usage, { conversations: 1, generations: 2 });
+  assert.match(partial.error, /1 个/);
+  fs.rmSync(path.join(root, 'session.db'));
+  assert.equal(collect(root).usage, null);
+});
+
 console.log('== pricing ==');
 t('Codex 已带 costUsd 直接采信并按 7.2 折算', () => {
   const r = pricer.price({ model: 'gpt-x', inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, costUsd: 1 });
@@ -953,9 +978,9 @@ t('dailyGoal.networkGB 每日流量目标：白名单合并、仅改一项保留
 t('hiddenCards 卡片显隐：白名单过滤 + 去重；非数组忽略保留原值；空数组 = 全部恢复显示', () => {
   const cur = { hiddenCards: ['zcode'], plans: {}, priceOverrides: {}, dailyGoal: { cny: 0 } };
   const next = applyPlansUpdate(cur, {
-    hiddenCards: ['claudeDesktop', 'claudeCode', 'claudeCode', 'bogus-tool', 42],
+    hiddenCards: ['claudeDesktop', 'claudeCode', 'claudeCode', 'antigravity', 'bogus-tool', 42],
   });
-  assert.deepEqual(next.hiddenCards, ['claudeDesktop', 'claudeCode'], '非法 key 剔除、重复去重');
+  assert.deepEqual(next.hiddenCards, ['claudeDesktop', 'claudeCode', 'antigravity'], '非法 key 剔除、重复去重');
   const keep = applyPlansUpdate({ hiddenCards: ['zcode'] }, { hiddenCards: 'not-array' });
   assert.deepEqual(keep.hiddenCards, ['zcode'], '非数组整体忽略');
   const clear = applyPlansUpdate(cur, { hiddenCards: [] });
@@ -2187,7 +2212,7 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     assert.ok(s.modelUsage && typeof s.modelUsage === 'object', 'modelUsage 应为纯计算恒有（今日模型排行）');
     assert.ok(s.projectUsage && typeof s.projectUsage === 'object', 'projectUsage 应为纯计算恒有（项目统计）');
     for (const [k, v] of Object.entries(s.vendors)) {
-      assert.ok(['zhipu', 'minimax', 'deepseek', 'bailian', 'moonshot', 'anthropic', 'openai'].includes(k), `未知服务商 ${k}`);
+      assert.ok(['zhipu', 'minimax', 'deepseek', 'bailian', 'moonshot', 'anthropic', 'openai', 'volcengine'].includes(k), `未知服务商 ${k}`);
       for (const w of ['today', 'month']) {
         for (const f of ['requests', 'inputTokens', 'outputTokens', 'costCny']) {
           assert.ok(typeof v[w][f] === 'number' && Number.isFinite(v[w][f]), `vendors.${k}.${w}.${f} 应为数字`);
@@ -2215,7 +2240,14 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     const s = await buildSnapshot();
     // 采集器状态：六个源各带 rows/ms/ok，与 rowStats 同键，前端「数据健康」直接按此渲染
     const expects = ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness'];
-    assert.deepEqual(Object.keys(s.collectorStatus).sort(), expects.slice().sort());
+    if (s.antigravityUsage || s.collectorErrors.antigravity) {
+      const st = s.collectorStatus.antigravity;
+      assert.ok(Number.isFinite(st.ms) && st.ms >= 0);
+      assert.equal(st.rows, s.antigravityUsage?.generations ?? null);
+      assert.equal(st.ok, !s.collectorErrors.antigravity);
+      if (s.antigravityUsage) assert.ok(Number.isInteger(s.antigravityUsage.conversations));
+    }
+    assert.deepEqual(Object.keys(s.collectorStatus).filter(k => k !== 'antigravity').sort(), expects.slice().sort());
     for (const k of expects) {
       const st = s.collectorStatus[k];
       assert.ok(Number.isInteger(st.rows) && st.rows >= 0, `collectorStatus.${k}.rows 应为非负整数`);
@@ -2249,6 +2281,7 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     try {
       const s = await buildSnapshot();
       assert.equal(s.readonly, true, '只读展示端应带 readonly 标记');
+      assert.equal(s.antigravityUsage, null);
       assert.deepEqual(s.collectorStatus, {}, '展示端不列本机采集器状态（服务器上没有 ~/.zcode 等源）');
       for (const k of ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness']) {
         assert.ok(!(k in s.collectorErrors), `readonly 下不应报 ${k} 的采集错误`);
@@ -2971,11 +3004,12 @@ t('预算节：工具 cnyPerMonth 配置时出现（月报直接比月额度）'
     assert.equal((await httpJson(P, '/api/plans', { host: `localhost:${P}` })).status, 200, '本机 Host 正常放行');
   });
 
-  await ta('GET /api/health：200 + { ok, builtAt }，不触发快照构建（启动脚本探活契约）', async () => {
+  await ta('GET /api/health：200 + { ok, version, builtAt }，不触发快照构建（启动脚本探活契约）', async () => {
     const r = await httpJson(P, '/api/health');
     assert.equal(r.status, 200);
     const j = JSON.parse(r.body);
     assert.equal(j.ok, true);
+    assert.equal(j.version, require('../package.json').version);
     assert.ok(j.builtAt === null || Number.isFinite(j.builtAt), `builtAt 应为 null 或有限数，got ${j.builtAt}`);
   });
 
@@ -3306,6 +3340,51 @@ console.log('== 集成：mcp.js report 冒烟（子进程 + 独立配置目录�
       fs.rmSync(mcpTmp, { recursive: true, force: true });
       fs.rmSync(emptyHome, { recursive: true, force: true });
     }
+  });
+
+  await ta('Google AI Pro 两处卡片使用同一月费，数据不足时不生成倍数或实时额度', async () => {
+    const elements = new Map();
+    const get = id => {
+      if (!elements.has(id)) elements.set(id, {
+        style: {}, children: [],
+        addEventListener() {}, setAttribute() {}, closest() { return this; },
+      });
+      return elements.get(id);
+    };
+    globalThis.window = { addEventListener() {} };
+    globalThis.document = {
+      getElementById: get,
+      documentElement: { dataset: {} },
+      body: { classList: { remove() {} } },
+      addEventListener() {},
+    };
+
+    const { setSnap } = await import('../web/js/state.js');
+    const { renderPlanValue } = await import('../web/js/plan-value.js');
+    const { renderQuotaCards } = await import('../web/js/render-cards.js');
+    const snapshot = {
+      plans: { plans: { codex: { usdPerMonth: 20 } }, subscriptions: [] },
+      agg: { daily: {}, dailyKeys: [] },
+      antigravityUsage: { conversations: 2, generations: 7 },
+    };
+    setSnap(snapshot);
+    renderPlanValue();
+    renderQuotaCards();
+    assert.match(get('planValueCards').innerHTML, /美国官网参考价/);
+    assert.match(get('planValueCards').innerHTML, /暂无法计算/);
+    assert.match(get('quotaCards').innerHTML, /\$19\.99\/月/);
+    assert.match(get('quotaCards').innerHTML, /2 个会话 · 7 条生成记录/);
+    assert.match(get('quotaCards').innerHTML, /账户实时余量暂不可用/);
+    assert.doesNotMatch(get('quotaCards').innerHTML, /<span class="tag">实时<\/span>/);
+
+    snapshot.plans.subscriptions = [{ name: 'Google AI Pro', payCnyPerMonth: 130 }];
+    renderPlanValue();
+    renderQuotaCards();
+    const valueCards = get('planValueCards').innerHTML;
+    assert.equal(valueCards.match(/<h3>Google AI Pro/g)?.length, 1);
+    assert.match(valueCards, /¥130\/月/);
+    assert.match(valueCards, /pv-codex/);
+    assert.match(get('quotaCards').innerHTML, /¥130\/月/);
   });
 
   for (const s of [hs, sink, e2eSink]) s.close();

@@ -16,6 +16,7 @@ const codexSessions = require('../collectors/codex-sessions');
 const workbuddy = require('../collectors/workbuddy');
 const claudecode = require('../collectors/claudecode');
 const deepseekHarness = require('../collectors/deepseek-harness'); // v1.7.4：dsh 会话（zstd JSONL）
+const antigravity = require('../collectors/antigravity');
 const chatgptQuota = require('../collectors/chatgpt-quota');
 const minimaxQuota = require('../collectors/minimax-quota');
 const zhipuQuota = require('../collectors/zhipu-quota');
@@ -70,6 +71,8 @@ async function buildSnapshot() {
   const [clc, clcMs] = clock(() => claudecode.collect());
   const [cs, csMs] = clock(() => codexSessions.collect());
   const [dh, dhMs] = clock(() => deepseekHarness.collect());
+  const readonly = isReadonly();
+  const [ag, agMs] = readonly ? [null, 0] : clock(() => antigravity.collect());
   const round1 = n => Math.round(n * 10) / 10;
   // Codex 双源切换点：cc-switch（2026-10-15 起停更）与 ~/.codex/sessions 的重叠期只认前者，
   // 会话行仅取 cc-switch 末条之后 —— 防止两源对同一请求双计；cc-switch 恢复记录时自动跟随。
@@ -100,11 +103,16 @@ async function buildSnapshot() {
     deepseekHarness: { rows: dh.rows.length, ms: round1(dhMs), ok: !dh.error },
   };
 
+  if (ag?.error) errors.antigravity = ag.error;
+  if (ag?.usage || ag?.error) {
+    collectorStatus.antigravity = { rows: ag.usage?.generations ?? null, ms: round1(agMs), ok: !ag.error };
+  }
+
   // 只读展示端（云端，AI_QUOTA_HISTORY=readonly）：本机采集器在这里必然打不开源库
   // （~/.zcode、~/.cc-switch 等不在服务器上），报错是环境事实而非故障。
   // 若照实上报，前端「数据健康」会天天显示「2 个数据源异常」并自动展开——真出问题时就没人看了。
   // 因此展示端一律不报本机采集器状态：数据来自主端同步的归档库与脱敏快照，健康面板只留归档与远程源。
-  if (isReadonly()) {
+  if (readonly) {
     collectorStatus = {};
     for (const k of ['zcode', 'ccswitch', 'codexSessions', 'workbuddy', 'claudeCode', 'deepseekHarness']) delete errors[k];
   }
@@ -302,7 +310,6 @@ async function buildSnapshot() {
     },
   };
 
-  const readonly = isReadonly();
   return {
     builtAt: Date.now(),
     readonly, // 前端据此说明「只读展示端，本机采集器不在此运行」
@@ -323,6 +330,7 @@ async function buildSnapshot() {
     syncStale,
     collectorErrors: errors,
     collectorStatus,
+    antigravityUsage: ag?.usage ?? null,
     historyStatus,
     forecast,
     rowStats: { zcode: zc.rows.length, ccswitch: cc.rows.length, codexSessions: csRows.length, workbuddy: wb.rows.length, claudeCode: clc.rows.length, dsh: dh.rows.length },

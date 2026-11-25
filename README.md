@@ -1,6 +1,6 @@
 # 🎯 AI 额度看板
 
-[English](README.en.md) | 中文
+[English](README.en.md) | 中文 | [v1.8.4 发布说明](https://github.com/YX-NAS/ai-quota-dashboard/releases/tag/v1.8.4)
 
 ![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=node.js&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -9,7 +9,7 @@
 
 **每天用 AI 写代码，但你可能说不清：今天烧了多少钱？智谱的 5 小时窗口还剩多少？这个月照这么用下去得花多少？**
 
-这个看板把这些问题变成一屏数字。它蹲在你的电脑里，默默读着 ZCode、Claude Code、Codex、WorkBuddy、DeepSeek Harness 的本地记录，算好每一分钱（等价成本）、盯紧每一个额度窗口——**不联网上传任何东西**。
+这个看板把这些问题变成一屏数字。它蹲在你的电脑里，默默读着 ZCode、Claude Code、Codex、WorkBuddy、DeepSeek Harness 和 Antigravity IDE 的本地记录，算好每一分钱（等价成本）、盯紧每一个额度窗口——**不联网上传任何东西**。
 
 ![看板总览：当日目标成本横幅 + 今日 KPI + 工具卡片](docs/screenshots/dashboard.png)
 
@@ -90,6 +90,9 @@ Windows 懒人一键全套（服务 + 托盘 ⚡ + 桌面卡片），双击 `sta
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | WorkBuddy | `~/.workbuddy-ai/projects/**/*.jsonl` |
 | DeepSeek Harness | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（zstd 多帧会话） |
+| Antigravity IDE | `~/.gemini/antigravity/conversations/*.db`（共享库，会话数与生成记录数） |
+
+Antigravity IDE 卡片可展开查看[官方模型及套餐可用性](https://antigravity.google/docs/models?app=antigravity-ide)。Google AI Pro 出现在「套餐性价比」和「套餐统计」，默认使用[美国官网参考价](https://one.google.com/about/plans?gl=US&hl=en-US) US$19.99/月。可在「设置 → 订阅套餐」添加同名条目覆盖实付金额。统计卡展示[付费 Pro 额度规则](https://antigravity.google/docs/plans?hl=en)和本机累计活动。账户实时余量、套餐 Token 和 API 等价成本暂无数据。云端只读展示端显示套餐和模型信息。
 
 | 套餐实时额度（查得到就显示，查不到就跳过） | 凭证从哪来 |
 |---|---|

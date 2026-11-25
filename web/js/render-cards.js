@@ -15,6 +15,64 @@ export const TOOLS = [
   { key: 'dsh', name: 'DeepSeek Harness', planName: 'DeepSeek API 直连（充值按量）', color: '#4d6bfe' },
 ];
 
+export const ANTIGRAVITY_CARD = { key: 'antigravity', name: 'Antigravity IDE', color: '#7dc4e4' };
+
+export const GOOGLE_AI_PRO = 'Google AI Pro';
+
+export function isGoogleAiPro(sub) {
+  return typeof sub?.name === 'string' && sub.name.trim().toLowerCase() === GOOGLE_AI_PRO.toLowerCase();
+}
+
+export function googleAiProPrice() {
+  const subs = snap.plans.subscriptions;
+  const sub = Array.isArray(subs) ? subs.find(isGoogleAiPro) : undefined;
+  if (sub?.payCnyPerMonth > 0) return { cost: `¥${sub.payCnyPerMonth}/月`, label: '配置月费' };
+  if (sub?.usdPerMonth > 0) return { cost: `$${sub.usdPerMonth}/月`, label: '配置月费' };
+  return { cost: '$19.99/月', label: '美国官网参考价' };
+}
+
+const ANTIGRAVITY_MODELS = [
+  ['Gemini 4 Neon', 'Pro¹ / Ultra / Enterprise'],
+  ['Gemini 4 Carbon', 'Pro¹ / Ultra / Enterprise'],
+  ['Gemini 4 Argon', 'Pro¹ / Ultra / Enterprise', true],
+  ['Gemini 4 Hydrogen', '所有套餐'],
+  ['Orchestrator', 'Pro¹ / Ultra / Enterprise（固定组合）'],
+  ['Gemini 3.8 Flash', '所有套餐', true],
+  ['Gemini 3.7 Flash', 'Enterprise'],
+  ['Gemini 3.6 Flash', 'Enterprise'],
+  ['Gemini 3.1 Pro', 'Enterprise'],
+  ['Claude Sonnet 5.5 (Thinking)', '付费 Pro / Ultra / Enterprise'],
+  ['Claude Opus 5.5 (Thinking)', '付费 Pro / Ultra / Enterprise'],
+  ['Claude Sonnet 4.6 (Thinking)', 'Free / Plus / Pro', true],
+  ['Claude Opus 4.6 (Thinking)', 'Free / Plus / Pro', true],
+  ['GPT-OSS 120B', 'Free / Plus / Pro / Ultra', true],
+];
+
+function antigravityCard() {
+  const { key, name, color } = ANTIGRAVITY_CARD;
+  const usage = snap.antigravityUsage;
+  const error = snap.collectorErrors?.antigravity;
+  const counts = usage
+    ? `<div><span class="k">本地会话</span><span>${fmt(usage.conversations)} 个</span></div>
+       <div><span class="k">生成记录</span><span>${fmt(usage.generations)} 条</span></div>`
+    : `<div><span class="mut">${snap.readonly ? '当前实例为只读展示端' : error ? '本地统计暂不可用' : '未找到本地会话目录'}</span></div>`;
+  const models = ANTIGRAVITY_MODELS.map(([model, plans, retiring]) =>
+    `<li>${esc(model)} <span class="mut">· ${esc(plans)}${retiring ? ' · 官方计划 2026-11-30 下线' : ''}</span></li>`
+  ).join('');
+  return `<div class="card" data-key="${key}">
+    <h3><span class="tool-dot" style="background:${color}"></span>${name}</h3>
+    <div class="rows">${counts}</div>
+    ${usage ? '<div class="fresh">本地累计 · Antigravity 客户端共享会话库</div>' : ''}
+    ${error ? `<div class="fresh err">${esc(error)}</div>` : ''}
+    <details>
+      <summary>支持的模型（按套餐）</summary>
+      <ul>${models}</ul>
+      <p class="mut">¹ 付费 Pro 或符合资格的设备试用。</p>
+      <a href="https://antigravity.google/docs/models?app=antigravity-ide">Google 官方模型清单</a> <small class="mut">（核对于 2026-11-26）</small>
+    </details>
+  </div>`;
+}
+
 // 套餐实时额度卡（5h / 周窗口）
 function quotaBar(label, used, resetMs) {
   if (used == null) return `<div class="quota-line"><span>${label}</span><span class="mut">不可用</span></div>`;
@@ -60,6 +118,21 @@ function planCostBadge(toolKey) {
 
 export function renderQuotaCards() {
   const items = [];
+
+  const pro = googleAiProPrice();
+  const usage = snap.antigravityUsage;
+  items.push({
+    name: GOOGLE_AI_PRO,
+    live: false,
+    note: 'Antigravity IDE · 付费 Pro',
+    cost: esc(pro.cost),
+    body: `<div class="quota-line"><span>5 小时窗口</span><span class="mut">每 5 小时刷新，受周上限约束</span></div>
+      <div class="quota-line"><span>周窗口</span><span class="mut">付费 Pro 周上限较高 · 账户实时余量暂不可用</span></div>
+      <div class="quota-line"><span>本机累计活动</span><span class="mut">${usage
+        ? `${fmt(usage.conversations)} 个会话 · ${fmt(usage.generations)} 条生成记录`
+        : '暂无本地统计'}</span></div>`,
+    fresh: `${esc(pro.label)} · <a href="https://antigravity.google/docs/plans?hl=en">官方额度规则</a>${usage ? ' · 活动来自共享会话库' : ''}`,
+  });
 
   const cgq = snap.chatgptQuota;
   const cgMode = quotaCardMode(cgq, 'chatgpt');
@@ -115,7 +188,7 @@ function renderQuotaItems(items) {
   document.getElementById('quotaCards').closest('section').style.display = items.length ? '' : 'none';
   document.getElementById('quotaCards').innerHTML = items.map(it => `
     <div class="card" data-key="${esc(it.name)}">
-      <h3>${esc(it.name)} <span class="tag">实时</span>${it.cost ? `<span class="tag cost" title="${esc(it.tip || '')}">${it.cost}</span>` : ''}</h3>
+      <h3>${esc(it.name)} ${it.live === false ? '' : ' <span class="tag">实时</span>'}${it.cost ? `<span class="tag cost" title="${esc(it.tip || '')}">${it.cost}</span>` : ''}</h3>
       <div class="rows"><div><span class="k">适用</span><span class="mut" style="font-size:12px">${it.note}</span></div></div>
       ${it.body}
       <div class="fresh">${it.fresh}${it.tip ? ' · ' + esc(it.tip) : ''}</div>
@@ -448,8 +521,11 @@ export function renderCards() {
     ? `<div class="cards-hidden-hint">已隐藏 ${hiddenSet.size} 个工具卡片 · 设置 → 卡片显示 可恢复</div>` : '';
   // 卡片网格里只放真正的卡片（auto-fit 才能折叠空轨道、让剩余卡片拉伸铺满）；
   // 折叠条/提示条放独立容器 #cardsAux，整行显示
-  document.getElementById('cards').innerHTML =
+  const cards = document.getElementById('cards');
+  const modelsOpen = cards.querySelector('[data-key="antigravity"] details')?.open;
+  cards.innerHTML =
     TOOLS.filter(t => rowStatOf(t.key) && !hiddenSet.has(t.key)).map(buildCard).join('')
+    + (hiddenSet.has(ANTIGRAVITY_CARD.key) ? '' : antigravityCard())
     + (idleExpanded ? idleTools.map(buildCard).join('') : '');
   document.getElementById('cardsAux').innerHTML =
     (idleTools.length ? `<div class="card idle-toggle" id="idleToggle">另有 ${idleTools.length} 个未启用的工具 <span class="arr">${idleExpanded ? '▾' : '▸'}</span></div>` : '')
@@ -459,5 +535,7 @@ export function renderCards() {
     safeSet(idleToolsKey, idleExpanded ? '0' : '1');
     renderCards();
   });
+  const modelDetails = cards.querySelector('[data-key="antigravity"] details');
+  if (modelDetails && modelsOpen) modelDetails.open = true;
   applyCardOrder('cards');
 }

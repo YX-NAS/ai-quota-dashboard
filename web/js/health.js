@@ -12,6 +12,7 @@ const COLLECTORS = [
   ['codexSessions', 'Codex 会话', '~/.codex/sessions'],
   ['claudeCode', 'Claude Code', '~/.claude'],
   ['workbuddy', 'WorkBuddy', '~/.workbuddy-ai'],
+  ['antigravity', 'Antigravity IDE', '~/.gemini/antigravity/conversations'],
   ['deepseekHarness', 'DeepSeek Harness', '~/.dsh'],
 ];
 
@@ -65,7 +66,7 @@ export function renderHealth() {
       rows.push(`<tr>
         <td>${name}<div class="h-src">${src}</div></td>
         <td>${okMark(s.ok)}</td>
-        <td class="h-num">${fmt(s.rows)} 行${extra}</td>
+        <td class="h-num">${s.rows == null ? '—' : fmt(s.rows) + ' 行'}${extra}</td>
         <td class="h-num">${s.ms >= 1000 ? (s.ms / 1000).toFixed(1) + 's' : Math.round(s.ms) + 'ms'}</td>
         <td class="h-err">${errs[key] ? escText(errs[key]) : ''}</td>
       </tr>`);

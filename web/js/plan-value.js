@@ -7,7 +7,7 @@
 // 无 subscriptions 配置时回退旧行为（按工具聚合：payCnyPerMonth/usdPerMonth + 工具等价）。
 import { esc, fmtCny, fmt, monthKey } from './utils.js';
 import { snap } from './state.js';
-import { TOOLS } from './render-cards.js';
+import { TOOLS, GOOGLE_AI_PRO, googleAiProPrice, isGoogleAiPro } from './render-cards.js';
 
 function daysInMonth(ym) {
   return new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
@@ -146,9 +146,20 @@ export function renderPlanValue() {
   const fx = snap.plans.usdCnyRate || 7.2;
   const cur = monthKey(), prev = prevMonthKey();
   const dim = daysInMonth(cur);
-  const items = [];
+  const pro = googleAiProPrice();
+  const items = [`<div class="card" data-key="pv-google-ai-pro">
+    <h3>${GOOGLE_AI_PRO} <span class="tag cost" title="${esc(pro.label)}">${esc(pro.cost)}</span></h3>
+    <div class="rows">
+      <div><span class="k">月费口径</span><span>${esc(pro.label)}</span></div>
+      <div><span class="k">本月等价</span><span class="mut">缺少可归属套餐的 Token 用量</span></div>
+      <div><span class="k">性价比</span><span class="mut">暂无法计算</span></div>
+    </div>
+    <div class="fresh"><a href="https://one.google.com/about/plans?gl=US&amp;hl=en-US">Google One 官方价格</a></div>
+  </div>`];
 
-  const subs = Array.isArray(snap.plans.subscriptions) ? snap.plans.subscriptions : [];
+  const subs = Array.isArray(snap.plans.subscriptions)
+    ? snap.plans.subscriptions.filter(sub => !isGoogleAiPro(sub))
+    : [];
   if (subs.length) {
     for (const sub of subs) {
       const m = matchMonth(cur, sub);

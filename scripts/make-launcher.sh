@@ -5,6 +5,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="$(node -p 'require(process.argv[1]).version' "${REPO}/package.json")"
 APP_NAME="AI额度看板"
 DIST="${REPO}/dist"
 APP="${DIST}/${APP_NAME}.app"
@@ -30,7 +31,7 @@ EOF
 chmod 755 "${APP}/Contents/MacOS/launch"
 
 # ---------- Info.plist：LSUIElement = 纯启动器（不占 Dock、执行完即退） ----------
-cat > "${APP}/Contents/Info.plist" <<'EOF'
+cat > "${APP}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -38,8 +39,8 @@ cat > "${APP}/Contents/Info.plist" <<'EOF'
   <key>CFBundleName</key><string>AI 额度看板</string>
   <key>CFBundleDisplayName</key><string>AI 额度看板</string>
   <key>CFBundleIdentifier</key><string>local.ai-quota.launcher</string>
-  <key>CFBundleVersion</key><string>1.0.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>launch</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>

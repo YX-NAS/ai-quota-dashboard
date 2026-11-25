@@ -9,7 +9,7 @@
 
 **You use AI coding tools every day — but can you answer: how much did today cost? How much of your Zhipu 5-hour window is left? What will this month cost at the current pace?**
 
-This dashboard turns those questions into one screen of numbers. It quietly reads the local records of ZCode, Claude Code, Codex, WorkBuddy and DeepSeek Harness on your machine, prices every request, and watches every quota window — **nothing ever leaves your computer**.
+This dashboard turns those questions into one screen of numbers. It quietly reads the local records of ZCode, Claude Code, Codex, WorkBuddy, DeepSeek Harness, and Antigravity IDE on your machine, prices every request, and watches every quota window — **nothing ever leaves your computer**.
 
 ![Dashboard overview: daily cost target banner + KPIs + per-tool cards](docs/screenshots/dashboard.png)
 
@@ -86,6 +86,9 @@ Launch at login (Windows): `Win+R` → `shell:startup` → drop a shortcut to `s
 | ZCode | `~/.zcode/cli/db/db.sqlite` |
 | WorkBuddy | `~/.workbuddy-ai/projects/**/*.jsonl` |
 | DeepSeek Harness | `~/.dsh/sessions/**/session.v4.jsonl.zstd` (multi-frame zstd) |
+| Antigravity IDE | `~/.gemini/antigravity/conversations/*.db` (shared store, conversation and generation-record counts) |
+
+The Antigravity IDE card lists [official models and plan availability](https://antigravity.google/docs/models?app=antigravity-ide). Google AI Pro appears in Plan Value and Plan Statistics with a [US list price](https://one.google.com/about/plans?gl=US&hl=en-US) of US$19.99/month. Add a subscription named Google AI Pro in Settings to use your actual monthly price. The statistics card shows [paid Pro quota rules](https://antigravity.google/docs/plans?hl=en) and cumulative local activity. Live account quota, plan-attributed tokens, and equivalent API cost are currently unavailable. The read-only cloud dashboard displays plan and model information. [v1.8.4 release notes](https://github.com/YX-NAS/ai-quota-dashboard/releases/tag/v1.8.4)
 
 | Real-time plan quotas (best-effort) | Credentials |
 |---|---|

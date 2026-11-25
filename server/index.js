@@ -18,6 +18,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const { version } = require('../package.json');
 
 const plansStore = require('./lib/plans');
 const { makePricer, DEFAULT_PRICING } = require('./lib/pricing');
@@ -125,7 +126,7 @@ const requestHandler = async (req, res) => {
     // 探活：不触发 ensureFresh（绝不引发全量快照构建），启动脚本用它判断服务是否就绪，
     // 避免冷启动期打 /api/summary 造成 2s 探活超时 → 误判未运行 → 拉起双实例
     if (url.pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, builtAt: cache.builtAt || null });
+      return sendJson(res, 200, { ok: true, version, builtAt: cache.builtAt || null });
     }
 
     // —— v1.7 登录门禁：配置了凭据即启用；未启用时下面整段旁路，行为与 v1.6 一致 ——

@@ -1,7 +1,7 @@
 // 设置面板：额度 Key / 预警推送 / 单价编辑与在线更新，保存与加载逻辑（含全部按钮绑定）
 import { esc, toast, hourOptions } from './utils.js';
 import { snap } from './state.js';
-import { TOOLS } from './render-cards.js';
+import { TOOLS, ANTIGRAVITY_CARD } from './render-cards.js';
 
 // 保存 / 单价在线应用后要重拉快照并重渲染：load 归 main.js 所有（loadSeq 守卫在 load 内），
 // 由 main 启动时注入，避免 settings → main 的循环依赖
@@ -290,7 +290,7 @@ function renderSettingsBody(p) {
     ).join('') +
     `<hr><div class="qk-hint">卡片显示 —— 取消勾选的工具有卡片区整卡隐藏（表格 / 趋势图 / 每日明细仍保留全部数据）</div>
      <div class="hide-grid">` +
-    TOOLS.map(t => `<label class="ck"><input data-hide="${t.key}" type="checkbox" ${(p.hiddenCards || []).includes(t.key) ? '' : 'checked'}> ${t.name}</label>`).join('') +
+    [...TOOLS, ANTIGRAVITY_CARD].map(t => `<label class="ck"><input data-hide="${t.key}" type="checkbox" ${(p.hiddenCards || []).includes(t.key) ? '' : 'checked'}> ${t.name}</label>`).join('') +
     `</div>` +
     renderSubsEditor(p.subscriptions) +
     `<hr><div class="qk-hint">额度 / 余额 Key —— 已配置的显示为脱敏（如 <code>88b9…GXlN</code>），不改即保留；清空 = 回退自动发现；输入新值 = 覆盖</div>` +

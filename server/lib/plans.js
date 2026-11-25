@@ -196,7 +196,7 @@ function applyPlansUpdate(current, body) {
   }
   // 卡片显隐：合法工具 key 白名单 + 去重；非数组整体忽略（保留原值）
   if (body && Array.isArray(body.hiddenCards)) {
-    const valid = new Set(Object.keys(TEMPLATE.plans));
+    const valid = new Set([...Object.keys(TEMPLATE.plans), 'antigravity']);
     next.hiddenCards = [...new Set(body.hiddenCards.filter(k => valid.has(k)))];
   }
   // 在线单价源：只接受 url / auto 字段（空串 = 清除 url；url 必须 http/https）；
